@@ -8,6 +8,7 @@ import {
 } from "@/lib/settings";
 import { getModels } from "@/lib/ollama";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Card,
@@ -85,6 +86,21 @@ export default function Settings() {
               />
               Let the assistant see today's tasks and active projects for context
             </label>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Preferences</CardTitle>
+            <CardDescription>General app settings.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <label className="text-sm font-medium">Currency symbol</label>
+            <Input
+              value={settings.currency}
+              onChange={(e) => update({ currency: e.target.value })}
+              className="mt-1 w-24"
+            />
           </CardContent>
         </Card>
 
