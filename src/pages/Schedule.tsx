@@ -8,6 +8,7 @@ import {
   updateTask,
   deleteTask,
 } from "@/lib/tasks";
+import { type Project, listProjects } from "@/lib/projects";
 import { todayISO, formatDateLabel, formatTimeLabel } from "@/lib/date";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -36,11 +37,14 @@ function sortTasks(items: Task[]): Task[] {
 
 export default function Schedule() {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [newTitle, setNewTitle] = useState("");
   const [selected, setSelected] = useState<Task | null>(null);
 
   const refresh = useCallback(async () => {
-    setTasks(await listTasks());
+    const [t, p] = await Promise.all([listTasks(), listProjects()]);
+    setTasks(t);
+    setProjects(p);
   }, []);
 
   useEffect(() => {
@@ -72,6 +76,9 @@ export default function Schedule() {
     setSelected(null);
     refresh();
   }
+
+  const projectName = (id: string | null | undefined) =>
+    id ? projects.find((p) => p.id === id)?.name : undefined;
 
   const today = todayISO();
   const active = tasks.filter((t) => !t.done);
@@ -140,6 +147,7 @@ export default function Schedule() {
                 <TaskRow
                   key={t.id}
                   task={t}
+                  projectName={projectName(t.projectId)}
                   onToggle={() => toggle(t)}
                   onOpen={() => setSelected(t)}
                 />
@@ -159,6 +167,7 @@ export default function Schedule() {
                 <TaskRow
                   key={t.id}
                   task={t}
+                  projectName={projectName(t.projectId)}
                   onToggle={() => toggle(t)}
                   onOpen={() => setSelected(t)}
                 />
@@ -170,6 +179,7 @@ export default function Schedule() {
 
       <TaskDetailDialog
         task={selected}
+        projects={projects}
         onClose={() => setSelected(null)}
         onPatch={patch}
         onDelete={remove}
@@ -180,10 +190,12 @@ export default function Schedule() {
 
 function TaskRow({
   task,
+  projectName,
   onToggle,
   onOpen,
 }: {
   task: Task;
+  projectName?: string;
   onToggle: () => void;
   onOpen: () => void;
 }) {
@@ -205,10 +217,7 @@ function TaskRow({
         {task.done && <Check className="size-3" />}
       </button>
 
-      <button
-        onClick={onOpen}
-        className="flex-1 text-left"
-      >
+      <button onClick={onOpen} className="flex-1 text-left">
         <div
           className={cn(
             "text-sm",
@@ -219,9 +228,16 @@ function TaskRow({
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span className="flex items-center gap-1">
-            <span className={cn("size-1.5 rounded-full", priorityDot[task.priority])} />
+            <span
+              className={cn("size-1.5 rounded-full", priorityDot[task.priority])}
+            />
             {task.priority === "med" ? "medium" : task.priority}
           </span>
+          {projectName && (
+            <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-secondary-foreground">
+              {projectName}
+            </span>
+          )}
           {task.date && (
             <span>
               · {formatDateLabel(task.date)}

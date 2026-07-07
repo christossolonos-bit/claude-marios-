@@ -1,5 +1,6 @@
 import { Trash2 } from "lucide-react";
 import type { Task, Priority } from "@/lib/tasks";
+import type { Project } from "@/lib/projects";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,11 +15,13 @@ const priorities: { value: Priority; label: string }[] = [
 
 export default function TaskDetailDialog({
   task,
+  projects,
   onClose,
   onPatch,
   onDelete,
 }: {
   task: Task | null;
+  projects: Project[];
   onClose: () => void;
   onPatch: (id: string, patch: Partial<Task>) => void;
   onDelete: (id: string) => void;
@@ -62,6 +65,24 @@ export default function TaskDetailDialog({
               className="mt-1"
             />
           </div>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium">Project</label>
+          <select
+            value={task.projectId ?? ""}
+            onChange={(e) =>
+              onPatch(task.id, { projectId: e.target.value || null })
+            }
+            className="mt-1 flex h-9 w-full rounded-md border border-border bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="">No project</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div>

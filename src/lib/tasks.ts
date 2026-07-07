@@ -14,6 +14,7 @@ export interface Task {
   time: string | null; // "HH:MM" or null
   priority: Priority;
   notes: string;
+  projectId: string | null;
   createdAt: number;
 }
 
@@ -45,6 +46,7 @@ export async function addTask(title: string): Promise<Task> {
     time: null,
     priority: "med",
     notes: "",
+    projectId: null,
     createdAt: Date.now(),
   };
   const tasks = read();
