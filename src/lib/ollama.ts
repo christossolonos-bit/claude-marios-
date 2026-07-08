@@ -1,9 +1,12 @@
 // Minimal Ollama client.
 //
-// In the browser (dev preview) it uses the normal window.fetch. In the packaged
-// Tauri app it routes requests through the Tauri HTTP plugin, which performs the
-// request from the Rust backend — this has no browser origin, so Ollama accepts
-// it regardless of CORS/OLLAMA_ORIGINS and there's nothing to configure.
+// In the browser (dev preview) it uses window.fetch against localhost:11434,
+// which works because Ollama allows the localhost origin. In the packaged Tauri
+// app the browser origin (tauri.localhost) is blocked by Ollama's CORS and the
+// system proxy can interfere, so we call Rust commands instead — the request is
+// made server-side from Rust, so there's nothing to configure.
+
+import { invoke } from "@tauri-apps/api/core";
 
 const BASE = "http://localhost:11434";
 
@@ -24,18 +27,17 @@ function inTauri(): boolean {
   );
 }
 
-// Use the Tauri HTTP plugin (Rust-side request) when packaged, else window.fetch.
-async function httpFetch(url: string, init?: RequestInit): Promise<Response> {
-  if (inTauri()) {
-    const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
-    return tauriFetch(url, init);
-  }
-  return fetch(url, init);
-}
-
 export async function ping(): Promise<boolean> {
+  if (inTauri()) {
+    try {
+      await invoke<string[]>("ollama_models");
+      return true;
+    } catch {
+      return false;
+    }
+  }
   try {
-    const r = await httpFetch(`${BASE}/api/tags`);
+    const r = await fetch(`${BASE}/api/tags`);
     return r.ok;
   } catch {
     return false;
@@ -43,7 +45,10 @@ export async function ping(): Promise<boolean> {
 }
 
 export async function getModels(): Promise<string[]> {
-  const r = await httpFetch(`${BASE}/api/tags`);
+  if (inTauri()) {
+    return invoke<string[]>("ollama_models");
+  }
+  const r = await fetch(`${BASE}/api/tags`);
   if (!r.ok) throw new Error(`Ollama responded ${r.status}`);
   const j = (await r.json()) as { models?: OllamaTag[] };
   return (j.models ?? []).map((m) => m.name);
@@ -66,7 +71,18 @@ export async function streamChat(opts: {
   signal?: AbortSignal;
   onToken: (token: string) => void;
 }): Promise<void> {
-  const r = await httpFetch(`${BASE}/api/chat`, {
+  // Desktop app: one Rust round-trip that returns the full reply.
+  if (inTauri()) {
+    const content = await invoke<string>("ollama_chat", {
+      model: opts.model,
+      messages: opts.messages,
+    });
+    if (content) opts.onToken(content);
+    return;
+  }
+
+  // Browser: stream tokens directly from Ollama.
+  const r = await fetch(`${BASE}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -78,31 +94,23 @@ export async function streamChat(opts: {
     signal: opts.signal,
   });
 
-  if (!r.ok) {
+  if (!r.ok || !r.body) {
     const detail = await r.text().catch(() => "");
     throw new Error(`Ollama responded ${r.status}${detail ? `: ${detail}` : ""}`);
   }
 
-  // Stream token-by-token when the response body is a readable stream.
-  // If it isn't (some environments buffer the whole body), fall back to
-  // parsing the full NDJSON text at once — still correct, just not live.
-  if (r.body) {
-    const reader = r.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let newline: number;
-      while ((newline = buffer.indexOf("\n")) >= 0) {
-        handleLine(buffer.slice(0, newline), opts.onToken);
-        buffer = buffer.slice(newline + 1);
-      }
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let newline: number;
+    while ((newline = buffer.indexOf("\n")) >= 0) {
+      handleLine(buffer.slice(0, newline), opts.onToken);
+      buffer = buffer.slice(newline + 1);
     }
-    if (buffer) handleLine(buffer, opts.onToken);
-  } else {
-    const text = await r.text();
-    for (const line of text.split("\n")) handleLine(line, opts.onToken);
   }
+  if (buffer) handleLine(buffer, opts.onToken);
 }
