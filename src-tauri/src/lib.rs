@@ -57,6 +57,7 @@ async fn ollama_chat(model: String, messages: Value) -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![ollama_models, ollama_chat])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

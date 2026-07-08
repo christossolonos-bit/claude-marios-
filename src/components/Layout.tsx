@@ -11,6 +11,7 @@ import {
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useReminders } from "@/hooks/useReminders";
 
 const nav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -25,6 +26,8 @@ const nav = [
 ];
 
 export default function Layout() {
+  useReminders();
+
   return (
     <div className="flex h-screen bg-background text-foreground">
       <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card print:hidden">

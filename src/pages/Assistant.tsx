@@ -6,14 +6,17 @@ import {
   RefreshCw,
   AlertCircle,
   CircleDot,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { type ChatMessage, streamChat, ping } from "@/lib/ollama";
 import { getSettings } from "@/lib/settings";
 import { listTasks } from "@/lib/tasks";
 import { listProjects } from "@/lib/projects";
 import { todayISO, formatTimeLabel } from "@/lib/date";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { speak, stopSpeaking, ttsSupported } from "@/lib/tts";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -44,6 +47,7 @@ export default function Assistant() {
   const [streaming, setStreaming] = useState(false);
   const [online, setOnline] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [voiceOn, setVoiceOn] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const model = getSettings().model;
@@ -75,6 +79,8 @@ export default function Assistant() {
     setInput("");
     setStreaming(true);
 
+    const willSpeak = voiceOn;
+    let acc = "";
     const ac = new AbortController();
     abortRef.current = ac;
     try {
@@ -82,14 +88,17 @@ export default function Assistant() {
         model: s.model,
         messages: [{ role: "system", content: system }, ...history],
         signal: ac.signal,
-        onToken: (tok) =>
+        onToken: (tok) => {
+          acc += tok;
           setMessages((m) => {
             const copy = m.slice();
             const last = copy[copy.length - 1];
             copy[copy.length - 1] = { ...last, content: last.content + tok };
             return copy;
-          }),
+          });
+        },
       });
+      if (willSpeak && acc.trim()) speak(acc);
     } catch (e) {
       const err = e as Error;
       if (err.name !== "AbortError") setError(err.message || String(e));
@@ -101,12 +110,20 @@ export default function Assistant() {
 
   function stop() {
     abortRef.current?.abort();
+    stopSpeaking();
   }
 
   function newChat() {
     stop();
     setMessages([]);
     setError(null);
+  }
+
+  function toggleVoice() {
+    setVoiceOn((v) => {
+      if (v) stopSpeaking();
+      return !v;
+    });
   }
 
   return (
@@ -135,10 +152,27 @@ export default function Assistant() {
             </div>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={newChat}>
-          <RefreshCw className="size-4" />
-          New chat
-        </Button>
+        <div className="flex items-center gap-2">
+          {ttsSupported() && (
+            <Button
+              variant={voiceOn ? "default" : "outline"}
+              size="sm"
+              onClick={toggleVoice}
+              title={voiceOn ? "Voice replies on" : "Voice replies off"}
+            >
+              {voiceOn ? (
+                <Volume2 className="size-4" />
+              ) : (
+                <VolumeX className="size-4" />
+              )}
+              Voice
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={newChat}>
+            <RefreshCw className="size-4" />
+            New chat
+          </Button>
+        </div>
       </div>
 
       <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-8 py-6">
