@@ -27,7 +27,7 @@ const nav = [
 export default function Layout() {
   return (
     <div className="flex h-screen bg-background text-foreground">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card">
+      <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card print:hidden">
         <div className="flex h-14 items-center gap-2 border-b border-border px-5">
           <BookOpen className="size-5 text-primary" />
           <span className="font-semibold tracking-tight">AuthorHub</span>
