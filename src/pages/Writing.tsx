@@ -1,5 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { PenLine, Plus, Trash2, FileText } from "lucide-react";
+import {
+  PenLine,
+  Plus,
+  Trash2,
+  FileText,
+  SpellCheck,
+  Scissors,
+  RefreshCw,
+  Sparkles,
+  Check,
+  X,
+  Square,
+} from "lucide-react";
 import {
   type DocSummary,
   countWords,
@@ -9,8 +21,31 @@ import {
   updateDocument,
   deleteDocument,
 } from "@/lib/documents";
+import {
+  type EditAction,
+  ACTION_LABEL,
+  suggestEdit,
+} from "@/lib/writingAssist";
+import { ping } from "@/lib/ollama";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+interface Assist {
+  action: EditAction;
+  start: number;
+  end: number;
+  original: string;
+  scope: "selection" | "document";
+  suggestion: string;
+  busy: boolean;
+  error: boolean;
+}
+
+const ACTION_ICON: Record<EditAction, typeof SpellCheck> = {
+  grammar: SpellCheck,
+  tighten: Scissors,
+  rephrase: RefreshCw,
+};
 
 export default function Writing() {
   const [docs, setDocs] = useState<DocSummary[]>([]);
@@ -18,10 +53,14 @@ export default function Writing() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [online, setOnline] = useState<boolean | null>(null);
+  const [assist, setAssist] = useState<Assist | null>(null);
 
-  // Guards so autosave doesn't fire on the initial load of a document.
   const loadedId = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const selRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const abortRef = useRef<AbortController | null>(null);
 
   async function refreshList() {
     setDocs(await listDocuments());
@@ -29,11 +68,13 @@ export default function Writing() {
 
   useEffect(() => {
     refreshList();
+    ping().then(setOnline);
   }, []);
 
   async function openDoc(id: string) {
     const doc = await getDocument(id);
     if (!doc) return;
+    setAssist(null);
     loadedId.current = doc.id;
     setDocId(doc.id);
     setTitle(doc.title);
@@ -44,6 +85,7 @@ export default function Writing() {
   async function newDoc() {
     const doc = await createDocument();
     await refreshList();
+    setAssist(null);
     loadedId.current = doc.id;
     setDocId(doc.id);
     setTitle("");
@@ -58,6 +100,7 @@ export default function Writing() {
       setDocId(null);
       setTitle("");
       setBody("");
+      setAssist(null);
     }
     refreshList();
   }
@@ -76,7 +119,71 @@ export default function Writing() {
     };
   }, [title, body, docId]);
 
+  function trackSelection() {
+    const el = bodyRef.current;
+    if (el) selRef.current = { start: el.selectionStart, end: el.selectionEnd };
+  }
+
+  async function runAssist(action: EditAction) {
+    if (!docId) return;
+    let { start, end } = selRef.current;
+    if (start === end) {
+      // Nothing selected → act on the whole document.
+      start = 0;
+      end = body.length;
+    }
+    const original = body.slice(start, end);
+    if (!original.trim()) return;
+    const scope = start === 0 && end === body.length ? "document" : "selection";
+
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setAssist({
+      action,
+      start,
+      end,
+      original,
+      scope,
+      suggestion: "",
+      busy: true,
+      error: false,
+    });
+
+    try {
+      await suggestEdit({
+        action,
+        text: original,
+        signal: ac.signal,
+        onToken: (t) =>
+          setAssist((a) => (a ? { ...a, suggestion: a.suggestion + t } : a)),
+      });
+      setAssist((a) => (a ? { ...a, busy: false } : a));
+    } catch {
+      if (ac.signal.aborted) return;
+      setAssist((a) => (a ? { ...a, busy: false, error: true } : a));
+    }
+  }
+
+  function stopAssist() {
+    abortRef.current?.abort();
+    setAssist((a) => (a ? { ...a, busy: false } : a));
+  }
+
+  function acceptAssist() {
+    if (!assist) return;
+    const suggestion = assist.suggestion.trim();
+    setBody(body.slice(0, assist.start) + suggestion + body.slice(assist.end));
+    setAssist(null);
+  }
+
+  function discardAssist() {
+    abortRef.current?.abort();
+    setAssist(null);
+  }
+
   const words = countWords(body);
+  const assistDisabled = !docId || online === false || !!assist?.busy;
 
   return (
     <div className="flex h-full">
@@ -139,25 +246,103 @@ export default function Writing() {
         </div>
       </aside>
 
-      <div className="flex h-full flex-1 flex-col">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
         {docId ? (
           <>
-            <div className="border-b border-border px-8 py-4">
+            <div className="flex items-center gap-4 border-b border-border px-8 py-4">
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Untitled"
-                className="w-full bg-transparent text-2xl font-semibold tracking-tight placeholder:text-muted-foreground/50 focus:outline-none"
+                className="min-w-0 flex-1 bg-transparent text-2xl font-semibold tracking-tight placeholder:text-muted-foreground/50 focus:outline-none"
               />
+              <div className="flex shrink-0 items-center gap-1">
+                {(Object.keys(ACTION_LABEL) as EditAction[]).map((a) => {
+                  const Icon = ACTION_ICON[a];
+                  return (
+                    <Button
+                      key={a}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => runAssist(a)}
+                      disabled={assistDisabled}
+                      title={
+                        online === false
+                          ? "Ollama offline"
+                          : `${ACTION_LABEL[a]} (selection, or whole document)`
+                      }
+                    >
+                      <Icon className="size-4" />
+                      {ACTION_LABEL[a]}
+                    </Button>
+                  );
+                })}
+              </div>
             </div>
+
             <div className="flex-1 overflow-y-auto">
               <textarea
+                ref={bodyRef}
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
+                onSelect={trackSelection}
+                onKeyUp={trackSelection}
+                onMouseUp={trackSelection}
                 placeholder="Start writing…"
                 className="mx-auto block h-full w-full max-w-3xl resize-none bg-transparent px-8 py-6 text-[15px] leading-7 placeholder:text-muted-foreground/50 focus:outline-none"
               />
             </div>
+
+            {assist && (
+              <div className="mx-auto w-full max-w-3xl px-8 pb-3">
+                <div className="rounded-lg border border-border bg-card shadow-sm">
+                  <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <Sparkles className="size-4 text-primary" />
+                      {ACTION_LABEL[assist.action]}
+                      <span className="text-xs font-normal text-muted-foreground">
+                        ·{" "}
+                        {assist.scope === "document"
+                          ? "whole document"
+                          : "selected text"}
+                      </span>
+                    </div>
+                    {assist.busy && (
+                      <Button variant="ghost" size="sm" onClick={stopAssist}>
+                        <Square className="size-3.5" />
+                        Stop
+                      </Button>
+                    )}
+                  </div>
+                  <div className="max-h-52 overflow-y-auto px-3 py-2 text-sm leading-7 whitespace-pre-wrap">
+                    {assist.error ? (
+                      <span className="text-red-600">
+                        Couldn't reach the model. Is Ollama running?
+                      </span>
+                    ) : assist.suggestion ? (
+                      assist.suggestion
+                    ) : (
+                      <span className="text-muted-foreground">Thinking…</span>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-2">
+                    <Button variant="ghost" size="sm" onClick={discardAssist}>
+                      <X className="size-4" />
+                      Discard
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={acceptAssist}
+                      disabled={assist.busy || assist.error || !assist.suggestion.trim()}
+                    >
+                      <Check className="size-4" />
+                      Replace
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-between border-t border-border px-8 py-2 text-xs text-muted-foreground">
               <span>{words === 1 ? "1 word" : `${words} words`}</span>
               <span>
