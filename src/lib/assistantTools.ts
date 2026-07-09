@@ -8,8 +8,8 @@ import {
   deleteTask,
   type Priority,
 } from "@/lib/tasks";
-import { addProject } from "@/lib/projects";
-import { addSeminar } from "@/lib/seminars";
+import { addProject, updateProject } from "@/lib/projects";
+import { addSeminar, updateSeminar } from "@/lib/seminars";
 import { addMemory } from "@/lib/coachMemory";
 import { formatDateLabel, formatTimeLabel } from "@/lib/date";
 
@@ -36,10 +36,18 @@ export const TOOLS = [
     type: "function",
     function: {
       name: "add_project",
-      description: "Create a project (a book, course, or coaching program).",
+      description:
+        "Create a project (a book, course, or coaching program). Always fill in the description by summarizing what the user said about it.",
       parameters: {
         type: "object",
-        properties: { name: { type: "string" } },
+        properties: {
+          name: { type: "string", description: "Short project name" },
+          description: {
+            type: "string",
+            description:
+              "A 1-3 sentence description of the project, drawn from the conversation (goal, audience, key details).",
+          },
+        },
         required: ["name"],
       },
     },
@@ -48,10 +56,18 @@ export const TOOLS = [
     type: "function",
     function: {
       name: "add_seminar",
-      description: "Capture a new seminar or talk idea.",
+      description:
+        "Capture a new seminar or talk idea. Always fill in the notes by summarizing the idea and any details from the conversation.",
       parameters: {
         type: "object",
-        properties: { title: { type: "string" } },
+        properties: {
+          title: { type: "string", description: "Short seminar/talk title" },
+          notes: {
+            type: "string",
+            description:
+              "Notes capturing the idea, angle, audience, or key points mentioned in the conversation.",
+          },
+        },
         required: ["title"],
       },
     },
@@ -121,12 +137,16 @@ export async function executeTool(
     }
     case "add_project": {
       const name = str(args.name).trim() || "Untitled project";
-      await addProject(name);
+      const project = await addProject(name);
+      const description = str(args.description).trim();
+      if (description) await updateProject(project.id, { description });
       return `Added project: "${name}"`;
     }
     case "add_seminar": {
       const title = str(args.title).trim() || "Untitled seminar";
-      await addSeminar(title);
+      const seminar = await addSeminar(title);
+      const notes = str(args.notes).trim();
+      if (notes) await updateSeminar(seminar.id, { notes });
       return `Added seminar idea: "${title}"`;
     }
     case "complete_task": {
