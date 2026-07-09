@@ -107,3 +107,25 @@ export function suggestTitle(
     opts,
   );
 }
+
+// --- Translation (increment 4) ---------------------------------------------
+
+export const TRANSLATE_TARGETS = [
+  "English",
+  "Greek",
+  "Spanish",
+  "French",
+  "German",
+  "Italian",
+] as const;
+export type TranslateTarget = (typeof TRANSLATE_TARGETS)[number];
+
+export function translate(
+  opts: { text: string; target: string } & StreamOpts,
+): Promise<void> {
+  return stream(
+    "You are a skilled literary translator. Translate the text faithfully into the target language, preserving meaning, tone, voice, and paragraph breaks. Return ONLY the translation — no notes, explanations, or preamble.",
+    `Translate the following into ${opts.target}:\n\n${opts.text}`,
+    opts,
+  );
+}

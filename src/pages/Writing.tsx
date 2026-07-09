@@ -10,6 +10,7 @@ import {
   ChevronsRight,
   Expand,
   Heading,
+  Languages,
   Sparkles,
   Check,
   X,
@@ -36,6 +37,7 @@ import {
   suggestTitle,
 } from "@/lib/writingAssist";
 import { ping } from "@/lib/ollama";
+import TranslateDialog from "@/components/TranslateDialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -72,6 +74,7 @@ export default function Writing() {
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const [assist, setAssist] = useState<Assist | null>(null);
+  const [translateOpen, setTranslateOpen] = useState(false);
 
   const loadedId = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -119,6 +122,12 @@ export default function Writing() {
       setBody("");
       setAssist(null);
     }
+    refreshList();
+  }
+
+  async function saveTranslationCopy(newTitle: string, newBody: string) {
+    const doc = await createDocument(newTitle);
+    await updateDocument(doc.id, { body: newBody });
     refreshList();
   }
 
@@ -455,6 +464,19 @@ export default function Writing() {
                 <Heading className="size-4" />
                 Title
               </Button>
+
+              <span className="mx-1 h-5 w-px bg-border" />
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setTranslateOpen(true)}
+                disabled={!body.trim() || online === false}
+                title="Translate this document"
+              >
+                <Languages className="size-4" />
+                Translate
+              </Button>
             </div>
 
             <div className="flex-1 overflow-y-auto">
@@ -530,6 +552,14 @@ export default function Writing() {
                   : "Not saved yet"}
               </span>
             </div>
+
+            <TranslateDialog
+              open={translateOpen}
+              onClose={() => setTranslateOpen(false)}
+              docTitle={title}
+              original={body}
+              onSaveCopy={saveTranslationCopy}
+            />
           </>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center px-8 text-center text-muted-foreground">
