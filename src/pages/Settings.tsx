@@ -95,13 +95,38 @@ export default function Settings() {
             <CardTitle>Preferences</CardTitle>
             <CardDescription>General app settings.</CardDescription>
           </CardHeader>
-          <CardContent>
-            <label className="text-sm font-medium">Currency symbol</label>
-            <Input
-              value={settings.currency}
-              onChange={(e) => update({ currency: e.target.value })}
-              className="mt-1 w-24"
-            />
+          <CardContent className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">
+                Your name{" "}
+                <span className="font-normal text-muted-foreground">
+                  (how the assistant greets you)
+                </span>
+              </label>
+              <Input
+                value={settings.ownerName}
+                onChange={(e) => update({ ownerName: e.target.value })}
+                className="mt-1 max-w-xs"
+                placeholder="e.g. Marios"
+              />
+            </div>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.greetAloud}
+                onChange={(e) => update({ greetAloud: e.target.checked })}
+                className="mt-0.5"
+              />
+              Speak the welcome greeting aloud when the app opens
+            </label>
+            <div>
+              <label className="text-sm font-medium">Currency symbol</label>
+              <Input
+                value={settings.currency}
+                onChange={(e) => update({ currency: e.target.value })}
+                className="mt-1 w-24"
+              />
+            </div>
           </CardContent>
         </Card>
 

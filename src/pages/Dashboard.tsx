@@ -10,6 +10,7 @@ import {
 import { CalendarDays, LineChart, Lightbulb, Bot } from "lucide-react";
 import { type Task, listTasks } from "@/lib/tasks";
 import { todayISO, formatTimeLabel } from "@/lib/date";
+import WelcomeBanner from "@/components/WelcomeBanner";
 
 export default function Dashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -42,12 +43,7 @@ export default function Dashboard() {
 
   return (
     <div className="p-8">
-      <h1 className="text-2xl font-semibold tracking-tight">
-        Good to see you 👋
-      </h1>
-      <p className="mb-6 text-muted-foreground">
-        Here's your day at a glance. Modules light up as we build them.
-      </p>
+      <WelcomeBanner />
 
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((s) => (
