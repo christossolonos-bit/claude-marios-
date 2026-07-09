@@ -6,6 +6,7 @@ import Projects from "@/pages/Projects";
 import Seminars from "@/pages/Seminars";
 import Writing from "@/pages/Writing";
 import Translate from "@/pages/Translate";
+import Book from "@/pages/Book";
 import Assistant from "@/pages/Assistant";
 import Sales from "@/pages/Sales";
 import Marketing from "@/pages/Marketing";
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="seminars" element={<Seminars />} />
         <Route path="writing" element={<Writing />} />
         <Route path="translate" element={<Translate />} />
+        <Route path="book" element={<Book />} />
         <Route path="assistant" element={<Assistant />} />
         <Route path="sales" element={<Sales />} />
         <Route path="marketing" element={<Marketing />} />
