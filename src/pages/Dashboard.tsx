@@ -10,7 +10,7 @@ import {
 import { CalendarDays, LineChart, Lightbulb, Bot } from "lucide-react";
 import { type Task, listTasks } from "@/lib/tasks";
 import { todayISO, formatTimeLabel } from "@/lib/date";
-import WelcomeBanner from "@/components/WelcomeBanner";
+import DailyBriefing from "@/components/DailyBriefing";
 
 export default function Dashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -43,7 +43,7 @@ export default function Dashboard() {
 
   return (
     <div className="p-8">
-      <WelcomeBanner />
+      <DailyBriefing />
 
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((s) => (
@@ -95,7 +95,11 @@ export default function Dashboard() {
             <CardDescription>Local AI assistant</CardDescription>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
-            Your personalized Ollama assistant comes online in Phase 2.
+            Plan your day, draft ideas, or hand off a task.{" "}
+            <Link to="/assistant" className="text-primary hover:underline">
+              Open the assistant
+            </Link>
+            .
           </CardContent>
         </Card>
       </div>
