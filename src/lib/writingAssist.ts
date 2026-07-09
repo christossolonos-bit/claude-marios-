@@ -68,22 +68,26 @@ export function suggestEdit(
 
 // --- Generation (increment 3) ----------------------------------------------
 
+function about(context?: string): string {
+  return context ? `This writing is about ${context}.\n\n` : "";
+}
+
 export function suggestContinue(
-  opts: { body: string } & StreamOpts,
+  opts: { body: string; context?: string } & StreamOpts,
 ): Promise<void> {
   return stream(
     WRITE_SYSTEM,
-    `Continue this draft naturally from where it stops — about 2-4 sentences. Do not repeat what is already written.\n\n${opts.body}`,
+    `${about(opts.context)}Continue this draft naturally from where it stops — about 2-4 sentences. Do not repeat what is already written.\n\n${opts.body}`,
     opts,
   );
 }
 
 export function suggestExpand(
-  opts: { text: string } & StreamOpts,
+  opts: { text: string; context?: string } & StreamOpts,
 ): Promise<void> {
   return stream(
     WRITE_SYSTEM,
-    `Expand this passage with more detail, texture, or an example, keeping the meaning and voice:\n\n${opts.text}`,
+    `${about(opts.context)}Expand this passage with more detail, texture, or an example, keeping the meaning and voice:\n\n${opts.text}`,
     opts,
   );
 }
@@ -99,11 +103,11 @@ export function suggestTone(
 }
 
 export function suggestTitle(
-  opts: { body: string } & StreamOpts,
+  opts: { body: string; context?: string } & StreamOpts,
 ): Promise<void> {
   return stream(
     "You suggest one clear, evocative title for the author's piece. Return ONLY the title on a single line — no quotation marks, no 'Title:' prefix. Match the language of the text.",
-    `Suggest a title for this:\n\n${opts.body}`,
+    `${about(opts.context)}Suggest a title for this:\n\n${opts.body}`,
     opts,
   );
 }

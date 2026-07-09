@@ -37,6 +37,7 @@ import {
   suggestTitle,
 } from "@/lib/writingAssist";
 import { ping } from "@/lib/ollama";
+import { type Project, listProjects } from "@/lib/projects";
 import {
   type WritingStats,
   getStats,
@@ -80,6 +81,8 @@ export default function Writing() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [assist, setAssist] = useState<Assist | null>(null);
   const [stats, setStats] = useState<WritingStats>(() => getStats());
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState<string | null>(null);
 
   const loadedId = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -94,6 +97,7 @@ export default function Writing() {
   useEffect(() => {
     refreshList();
     ping().then(setOnline);
+    listProjects().then(setProjects);
   }, []);
 
   async function openDoc(id: string) {
@@ -104,6 +108,7 @@ export default function Writing() {
     setDocId(doc.id);
     setTitle(doc.title);
     setBody(doc.body);
+    setProjectId(doc.projectId);
     setSavedAt(doc.updatedAt);
   }
 
@@ -115,7 +120,13 @@ export default function Writing() {
     setDocId(doc.id);
     setTitle("");
     setBody("");
+    setProjectId(null);
     setSavedAt(null);
+  }
+
+  function changeProject(id: string | null) {
+    setProjectId(id);
+    if (docId) updateDocument(docId, { projectId: id });
   }
 
   async function removeDoc(id: string) {
@@ -230,6 +241,13 @@ export default function Writing() {
     });
   }
 
+  function writeContext(): string | undefined {
+    const p = projects.find((pr) => pr.id === projectId);
+    if (!p) return undefined;
+    const d = p.description.trim();
+    return `the project "${p.name}"${d ? ` — ${d}` : ""}`;
+  }
+
   function runExpand() {
     if (!docId) return;
     const { start, end, scope } = resolveTarget();
@@ -241,7 +259,9 @@ export default function Writing() {
       start,
       end,
       scope,
-      generate: streamer((o) => suggestExpand({ text: original, ...o })),
+      generate: streamer((o) =>
+        suggestExpand({ text: original, context: writeContext(), ...o }),
+      ),
     });
   }
 
@@ -269,7 +289,9 @@ export default function Writing() {
       start: at,
       end: at,
       scope: "insertion",
-      generate: streamer((o) => suggestContinue({ body, ...o })),
+      generate: streamer((o) =>
+        suggestContinue({ body, context: writeContext(), ...o }),
+      ),
     });
   }
 
@@ -281,7 +303,9 @@ export default function Writing() {
       start: 0,
       end: 0,
       scope: "document",
-      generate: streamer((o) => suggestTitle({ body, ...o })),
+      generate: streamer((o) =>
+        suggestTitle({ body, context: writeContext(), ...o }),
+      ),
     });
   }
 
@@ -424,13 +448,26 @@ export default function Writing() {
       <div className="flex h-full min-w-0 flex-1 flex-col">
         {docId ? (
           <>
-            <div className="border-b border-border px-8 py-4">
+            <div className="flex items-center gap-4 border-b border-border px-8 py-4">
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Untitled"
-                className="w-full bg-transparent text-2xl font-semibold tracking-tight placeholder:text-muted-foreground/50 focus:outline-none"
+                className="min-w-0 flex-1 bg-transparent text-2xl font-semibold tracking-tight placeholder:text-muted-foreground/50 focus:outline-none"
               />
+              <select
+                value={projectId ?? ""}
+                onChange={(e) => changeProject(e.target.value || null)}
+                title="Link this document to a project to write about"
+                className="h-9 max-w-52 shrink-0 rounded-md border border-border bg-background px-2 text-sm text-muted-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="">No project</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="flex flex-wrap items-center gap-1 border-b border-border px-8 py-2">
