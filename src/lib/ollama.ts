@@ -1,10 +1,7 @@
 // Minimal Ollama client.
 //
-// In the browser (dev preview) it uses window.fetch against localhost:11434,
-// which works because Ollama allows the localhost origin. In the packaged Tauri
-// app the browser origin (tauri.localhost) is blocked by Ollama's CORS and the
-// system proxy can interfere, so we call Rust commands instead — the request is
-// made server-side from Rust, so there's nothing to configure.
+// Browser (dev preview): window.fetch against localhost:11434.
+// Packaged Tauri app: Rust commands (server-side request, bypasses CORS/proxy).
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -13,6 +10,17 @@ const BASE = "http://localhost:11434";
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
+}
+
+export interface ToolCall {
+  id?: string;
+  function: { name: string; arguments: Record<string, unknown> | string };
+}
+
+export interface AssistantMessage {
+  role: string;
+  content: string;
+  tool_calls?: ToolCall[];
 }
 
 interface OllamaTag {
@@ -25,6 +33,25 @@ function inTauri(): boolean {
     (window as unknown as { __TAURI_INTERNALS__?: unknown })
       .__TAURI_INTERNALS__ !== undefined
   );
+}
+
+// POST a full /api/chat body; returns the parsed JSON response.
+async function rawChat(body: Record<string, unknown>): Promise<{
+  message?: AssistantMessage;
+}> {
+  if (inTauri()) {
+    return invoke("ollama_chat", { body });
+  }
+  const r = await fetch(`${BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const detail = await r.text().catch(() => "");
+    throw new Error(`Ollama responded ${r.status}${detail ? `: ${detail}` : ""}`);
+  }
+  return r.json();
 }
 
 export async function ping(): Promise<boolean> {
@@ -54,6 +81,23 @@ export async function getModels(): Promise<string[]> {
   return (j.models ?? []).map((m) => m.name);
 }
 
+// Tool-capable, non-streaming chat. Returns the assistant message, which may
+// contain tool_calls for the caller to execute.
+export async function chat(opts: {
+  model: string;
+  messages: unknown[];
+  tools?: unknown[];
+}): Promise<AssistantMessage> {
+  const resp = await rawChat({
+    model: opts.model,
+    messages: opts.messages,
+    tools: opts.tools,
+    stream: false,
+    think: false,
+  });
+  return resp.message ?? { role: "assistant", content: "" };
+}
+
 function handleLine(line: string, onToken: (t: string) => void): void {
   const trimmed = line.trim();
   if (!trimmed) return;
@@ -65,23 +109,26 @@ function handleLine(line: string, onToken: (t: string) => void): void {
   }
 }
 
+// Plain streaming chat (no tools). Browser streams token-by-token; desktop
+// returns the reply in one shot via the Rust command.
 export async function streamChat(opts: {
   model: string;
   messages: ChatMessage[];
   signal?: AbortSignal;
   onToken: (token: string) => void;
 }): Promise<void> {
-  // Desktop app: one Rust round-trip that returns the full reply.
   if (inTauri()) {
-    const content = await invoke<string>("ollama_chat", {
+    const resp = await rawChat({
       model: opts.model,
       messages: opts.messages,
+      stream: false,
+      think: false,
     });
+    const content = resp.message?.content ?? "";
     if (content) opts.onToken(content);
     return;
   }
 
-  // Browser: stream tokens directly from Ollama.
   const r = await fetch(`${BASE}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

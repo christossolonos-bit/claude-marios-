@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::Value;
 
 // Ollama's local API is reached from Rust (not the webview) so there is no web
 // origin for Ollama's CORS to reject, and no browser proxy in the way. We build
@@ -30,14 +30,10 @@ async fn ollama_models() -> Result<Vec<String>, String> {
     Ok(models)
 }
 
+// Takes a full /api/chat request body (so the frontend can include `tools`) and
+// returns the full JSON response (so it can read `message.tool_calls`).
 #[tauri::command]
-async fn ollama_chat(model: String, messages: Value) -> Result<String, String> {
-    let body = json!({
-        "model": model,
-        "messages": messages,
-        "stream": false,
-        "think": false,
-    });
+async fn ollama_chat(body: Value) -> Result<Value, String> {
     let resp = ollama_client()?
         .post("http://127.0.0.1:11434/api/chat")
         .json(&body)
@@ -49,8 +45,7 @@ async fn ollama_chat(model: String, messages: Value) -> Result<String, String> {
         let text = resp.text().await.unwrap_or_default();
         return Err(format!("Ollama responded {}: {}", status.as_u16(), text));
     }
-    let v: Value = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(v["message"]["content"].as_str().unwrap_or("").to_string())
+    resp.json::<Value>().await.map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

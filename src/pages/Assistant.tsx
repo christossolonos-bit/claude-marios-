@@ -8,47 +8,79 @@ import {
   CircleDot,
   Volume2,
   VolumeX,
+  Check,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { type ChatMessage, streamChat, ping } from "@/lib/ollama";
+import { type AssistantMessage, chat, ping } from "@/lib/ollama";
+import { TOOLS, executeTool } from "@/lib/assistantTools";
 import { getSettings } from "@/lib/settings";
 import { listTasks } from "@/lib/tasks";
 import { listProjects } from "@/lib/projects";
+import { listMemories, memoryContext } from "@/lib/coachMemory";
 import { todayISO, formatTimeLabel } from "@/lib/date";
 import { speak, stopSpeaking, ttsSupported } from "@/lib/tts";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-async function buildContext(): Promise<string> {
-  const s = getSettings();
-  if (!s.useContext) return "";
-  const [tasks, projects] = await Promise.all([listTasks(), listProjects()]);
-  const today = todayISO();
-  const todays = tasks.filter((t) => t.date === today && !t.done);
-  const active = projects.filter((p) => p.status === "active");
+interface UiMessage {
+  role: "user" | "assistant";
+  content: string;
+  actions?: string[];
+}
 
-  const lines: string[] = [];
-  if (todays.length) {
-    lines.push("Today's tasks:");
-    for (const t of todays) {
-      lines.push(`- ${t.time ? formatTimeLabel(t.time) + " " : ""}${t.title}`);
+async function buildSystemPrompt(): Promise<string> {
+  const s = getSettings();
+  const [tasks, projects, memories] = await Promise.all([
+    listTasks(),
+    listProjects(),
+    listMemories(),
+  ]);
+  const today = todayISO();
+  const now = new Date();
+  const dateLine = `Today is ${now.toLocaleDateString(undefined, {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  })} (${today}).`;
+
+  const toolsLine =
+    "You can manage the app for the user with tools: add tasks/reminders, add projects, add seminar ideas, complete or remove tasks, and remember durable facts about them. Call a tool whenever they ask to add, schedule, complete, remove, or note something. Resolve relative dates (like 'tomorrow') to absolute YYYY-MM-DD. After acting, confirm briefly and naturally.";
+
+  const workLines: string[] = [];
+  if (s.useContext) {
+    const todays = tasks.filter((t) => t.date === today && !t.done);
+    const active = projects.filter((p) => p.status === "active");
+    if (todays.length) {
+      workLines.push("Today's tasks:");
+      for (const t of todays)
+        workLines.push(
+          `- ${t.time ? formatTimeLabel(t.time) + " " : ""}${t.title}`,
+        );
     }
+    if (active.length)
+      workLines.push(`Active projects: ${active.map((p) => p.name).join(", ")}`);
   }
-  if (active.length) {
-    lines.push(`Active projects: ${active.map((p) => p.name).join(", ")}`);
-  }
-  return lines.join("\n");
+
+  return [
+    s.persona,
+    dateLine,
+    toolsLine,
+    memoryContext(memories),
+    workLines.length ? `The user's current work:\n${workLines.join("\n")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 export default function Assistant() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<UiMessage[]>([]);
   const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [online, setOnline] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [voiceOn, setVoiceOn] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const model = getSettings().model;
 
@@ -62,59 +94,87 @@ export default function Assistant() {
 
   async function send() {
     const text = input.trim();
-    if (!text || streaming) return;
+    if (!text || busy) return;
     setError(null);
 
     const s = getSettings();
-    const ctx = await buildContext();
-    const system = ctx
-      ? `${s.persona}\n\nContext about the user's current work:\n${ctx}`
-      : s.persona;
+    const system = await buildSystemPrompt();
+    const priorTurns = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
 
-    const history: ChatMessage[] = [
-      ...messages,
+    setMessages((m) => [
+      ...m,
       { role: "user", content: text },
-    ];
-    setMessages([...history, { role: "assistant", content: "" }]);
+      { role: "assistant", content: "" },
+    ]);
     setInput("");
-    setStreaming(true);
+    setBusy(true);
 
     const willSpeak = voiceOn;
-    let acc = "";
-    const ac = new AbortController();
-    abortRef.current = ac;
+    const convo: unknown[] = [
+      { role: "system", content: system },
+      ...priorTurns,
+      { role: "user", content: text },
+    ];
+    const actions: string[] = [];
+    let finalContent = "";
+
     try {
-      await streamChat({
-        model: s.model,
-        messages: [{ role: "system", content: system }, ...history],
-        signal: ac.signal,
-        onToken: (tok) => {
-          acc += tok;
-          setMessages((m) => {
-            const copy = m.slice();
-            const last = copy[copy.length - 1];
-            copy[copy.length - 1] = { ...last, content: last.content + tok };
-            return copy;
+      for (let i = 0; i < 5; i++) {
+        const msg: AssistantMessage = await chat({
+          model: s.model,
+          messages: convo,
+          tools: TOOLS,
+        });
+
+        if (msg.tool_calls && msg.tool_calls.length) {
+          convo.push({
+            role: "assistant",
+            content: msg.content ?? "",
+            tool_calls: msg.tool_calls,
           });
-        },
+          for (const tc of msg.tool_calls) {
+            const rawArgs = tc.function.arguments;
+            const parsed =
+              typeof rawArgs === "string"
+                ? safeParse(rawArgs)
+                : (rawArgs ?? {});
+            const result = await executeTool(tc.function.name, parsed);
+            actions.push(result);
+            convo.push({ role: "tool", content: result });
+          }
+          continue;
+        }
+
+        finalContent = msg.content ?? "";
+        break;
+      }
+
+      if (!finalContent) finalContent = actions.length ? "Done." : "";
+
+      setMessages((m) => {
+        const copy = m.slice();
+        copy[copy.length - 1] = {
+          role: "assistant",
+          content: finalContent,
+          actions: actions.length ? actions : undefined,
+        };
+        return copy;
       });
-      if (willSpeak && acc.trim()) speak(acc);
+      if (willSpeak && finalContent) speak(finalContent);
     } catch (e) {
       const err = e as Error;
-      if (err.name !== "AbortError") setError(err.message || String(e));
+      setError(err.message || String(e));
+      setMessages((m) => m.slice(0, -1)); // drop the empty assistant bubble
     } finally {
-      setStreaming(false);
-      abortRef.current = null;
+      setBusy(false);
     }
   }
 
-  function stop() {
-    abortRef.current?.abort();
-    stopSpeaking();
-  }
-
   function newChat() {
-    stop();
+    stopSpeaking();
     setMessages([]);
     setError(null);
   }
@@ -179,43 +239,62 @@ export default function Assistant() {
         {messages.length === 0 && (
           <div className="mx-auto mt-10 max-w-md text-center text-sm text-muted-foreground">
             <Bot className="mx-auto mb-3 size-8 text-muted-foreground/50" />
-            Your local life-coach assistant. Ask it to brainstorm a seminar, plan
-            your day, or draft ideas for the book — all running privately on your
-            machine.
+            Your local life-coach assistant. Ask it to plan your day, brainstorm a
+            seminar, or draft ideas — or just say{" "}
+            <span className="italic">"remind me to call the publisher at 3pm"</span>{" "}
+            and it'll add it for you.
           </div>
         )}
         {messages.map((m, i) => (
           <div
             key={i}
             className={cn(
-              "flex",
-              m.role === "user" ? "justify-end" : "justify-start",
+              "flex flex-col",
+              m.role === "user" ? "items-end" : "items-start",
             )}
           >
-            <div
-              className={cn(
-                "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
-                m.role === "user"
-                  ? "whitespace-pre-wrap bg-primary text-primary-foreground"
-                  : "bg-secondary text-secondary-foreground",
-              )}
-            >
-              {m.role === "assistant" ? (
-                m.content ? (
+            {m.actions && m.actions.length > 0 && (
+              <div className="mb-1.5 flex max-w-[80%] flex-col gap-1">
+                {m.actions.map((a, j) => (
+                  <div
+                    key={j}
+                    className="flex items-center gap-1.5 rounded-md border border-green-200 bg-green-50 px-2.5 py-1 text-xs text-green-700"
+                  >
+                    <Check className="size-3.5 shrink-0" />
+                    {a}
+                  </div>
+                ))}
+              </div>
+            )}
+            {(m.content || m.role === "user") && (
+              <div
+                className={cn(
+                  "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
+                  m.role === "user"
+                    ? "whitespace-pre-wrap bg-primary text-primary-foreground"
+                    : "bg-secondary text-secondary-foreground",
+                )}
+              >
+                {m.role === "assistant" ? (
                   <div className="md">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {m.content}
                     </ReactMarkdown>
                   </div>
-                ) : streaming && i === messages.length - 1 ? (
-                  "…"
                 ) : (
-                  ""
-                )
-              ) : (
-                m.content
+                  m.content
+                )}
+              </div>
+            )}
+            {m.role === "assistant" &&
+              !m.content &&
+              !m.actions &&
+              busy &&
+              i === messages.length - 1 && (
+                <div className="rounded-2xl bg-secondary px-4 py-2.5 text-sm text-muted-foreground">
+                  …
+                </div>
               )}
-            </div>
           </div>
         ))}
         {error && (
@@ -252,18 +331,19 @@ export default function Assistant() {
             placeholder="Message your coach…"
             className="max-h-40 min-h-[40px] flex-1 resize-none rounded-md border border-border bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
-          {streaming ? (
-            <Button type="button" variant="outline" onClick={stop}>
-              <Square className="size-4" />
-              Stop
-            </Button>
-          ) : (
-            <Button type="submit" disabled={!input.trim()}>
-              <Send className="size-4" />
-            </Button>
-          )}
+          <Button type="submit" disabled={!input.trim() || busy}>
+            {busy ? <Square className="size-4 animate-pulse" /> : <Send className="size-4" />}
+          </Button>
         </form>
       </div>
     </div>
   );
+}
+
+function safeParse(s: string): Record<string, unknown> {
+  try {
+    return JSON.parse(s) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
