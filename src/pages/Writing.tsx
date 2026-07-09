@@ -10,11 +10,11 @@ import {
   ChevronsRight,
   Expand,
   Heading,
-  Languages,
   Sparkles,
   Check,
   X,
   Square,
+  Flame,
 } from "lucide-react";
 import {
   type DocSummary,
@@ -37,7 +37,12 @@ import {
   suggestTitle,
 } from "@/lib/writingAssist";
 import { ping } from "@/lib/ollama";
-import TranslateDialog from "@/components/TranslateDialog";
+import {
+  type WritingStats,
+  getStats,
+  setGoal,
+  recordWords,
+} from "@/lib/writingGoal";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -74,7 +79,7 @@ export default function Writing() {
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
   const [assist, setAssist] = useState<Assist | null>(null);
-  const [translateOpen, setTranslateOpen] = useState(false);
+  const [stats, setStats] = useState<WritingStats>(() => getStats());
 
   const loadedId = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -125,12 +130,6 @@ export default function Writing() {
     refreshList();
   }
 
-  async function saveTranslationCopy(newTitle: string, newBody: string) {
-    const doc = await createDocument(newTitle);
-    await updateDocument(doc.id, { body: newBody });
-    refreshList();
-  }
-
   // Debounced autosave whenever the open document's title or body changes.
   useEffect(() => {
     if (!docId || loadedId.current !== docId) return;
@@ -138,6 +137,7 @@ export default function Writing() {
     saveTimer.current = setTimeout(async () => {
       await updateDocument(docId, { title, body });
       setSavedAt(Date.now());
+      setStats(recordWords(docId, countWords(body)));
       refreshList();
     }, 600);
     return () => {
@@ -379,6 +379,46 @@ export default function Writing() {
             </ul>
           )}
         </div>
+        <div className="border-t border-border p-3">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-xs font-medium">Today's writing</span>
+            {stats.streak > 0 && (
+              <span
+                className="flex items-center gap-0.5 text-xs font-medium text-amber-600"
+                title="Days in a row you hit your goal"
+              >
+                <Flame className="size-3.5" />
+                {stats.streak}
+              </span>
+            )}
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+            <div
+              className={cn(
+                "h-full rounded-full transition-all",
+                stats.today >= stats.goal ? "bg-green-500" : "bg-primary",
+              )}
+              style={{
+                width: `${stats.goal ? Math.min(100, (stats.today / stats.goal) * 100) : 0}%`,
+              }}
+            />
+          </div>
+          <div className="mt-1.5 flex items-center justify-between text-xs text-muted-foreground">
+            <span>
+              {stats.today} {stats.today === 1 ? "word" : "words"}
+            </span>
+            <span className="flex items-center gap-1">
+              goal
+              <input
+                type="number"
+                min={1}
+                value={stats.goal}
+                onChange={(e) => setStats(setGoal(Number(e.target.value)))}
+                className="w-14 rounded border border-border bg-background px-1 py-0.5 text-right text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </span>
+          </div>
+        </div>
       </aside>
 
       <div className="flex h-full min-w-0 flex-1 flex-col">
@@ -464,19 +504,6 @@ export default function Writing() {
                 <Heading className="size-4" />
                 Title
               </Button>
-
-              <span className="mx-1 h-5 w-px bg-border" />
-
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setTranslateOpen(true)}
-                disabled={!body.trim() || online === false}
-                title="Translate this document"
-              >
-                <Languages className="size-4" />
-                Translate
-              </Button>
             </div>
 
             <div className="flex-1 overflow-y-auto">
@@ -552,14 +579,6 @@ export default function Writing() {
                   : "Not saved yet"}
               </span>
             </div>
-
-            <TranslateDialog
-              open={translateOpen}
-              onClose={() => setTranslateOpen(false)}
-              docTitle={title}
-              original={body}
-              onSaveCopy={saveTranslationCopy}
-            />
           </>
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center px-8 text-center text-muted-foreground">
