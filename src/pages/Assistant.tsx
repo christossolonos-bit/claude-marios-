@@ -9,6 +9,10 @@ import {
   Volume2,
   VolumeX,
   Check,
+  History,
+  Plus,
+  Trash2,
+  MessageSquare,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -18,6 +22,15 @@ import { getSettings } from "@/lib/settings";
 import { listTasks } from "@/lib/tasks";
 import { listProjects } from "@/lib/projects";
 import { listMemories, memoryContext } from "@/lib/coachMemory";
+import {
+  type ConversationSummary,
+  type StoredMessage,
+  listConversations,
+  getConversation,
+  saveConversation,
+  deleteConversation,
+} from "@/lib/conversations";
+import { recall, recallContext } from "@/lib/recall";
 import { todayISO, formatTimeLabel } from "@/lib/date";
 import { speak, stopSpeaking, ttsSupported } from "@/lib/tts";
 import { Button } from "@/components/ui/button";
@@ -27,6 +40,7 @@ interface UiMessage {
   role: "user" | "assistant";
   content: string;
   actions?: string[];
+  ts?: number;
 }
 
 async function buildSystemPrompt(): Promise<string> {
@@ -58,7 +72,7 @@ async function buildSystemPrompt(): Promise<string> {
   const dateRefLine = `Date reference for resolving days:\n${dateRef.join("\n")}`;
 
   const toolsLine =
-    "You can manage the app for the user with tools: add tasks/reminders, add projects, add seminar ideas, complete or remove tasks, and remember durable facts about them. Call a tool whenever they ask to add, schedule, complete, remove, or note something. Resolve relative dates (like 'tomorrow') to absolute YYYY-MM-DD. After acting, confirm briefly and naturally.";
+    "You can manage the app for the user with tools: add tasks/reminders, add projects, add seminar ideas, complete or remove tasks, and remember durable facts about them. Call a tool whenever they ask to add, schedule, complete, remove, or note something. Resolve relative dates (like 'tomorrow') to absolute YYYY-MM-DD. After acting, confirm briefly and naturally. When the user is only asking a question or recalling something (e.g. \"what was my … idea?\"), just answer in prose from what you know — do NOT call the remember tool unless they are giving you genuinely new information.";
 
   const workLines: string[] = [];
   if (s.useContext) {
@@ -94,12 +108,43 @@ export default function Assistant() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [voiceOn, setVoiceOn] = useState(false);
+  const [convoId, setConvoId] = useState<string | null>(null);
+  const [history, setHistory] = useState<ConversationSummary[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const model = getSettings().model;
 
   useEffect(() => {
     ping().then(setOnline);
+    refreshHistory();
   }, []);
+
+  async function refreshHistory() {
+    setHistory(await listConversations());
+  }
+
+  async function openConversation(id: string) {
+    const convo = await getConversation(id);
+    if (!convo) return;
+    stopSpeaking();
+    setMessages(
+      convo.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        actions: m.actions,
+        ts: m.ts,
+      })),
+    );
+    setConvoId(convo.id);
+    setError(null);
+    setShowHistory(false);
+  }
+
+  async function removeConversation(id: string) {
+    await deleteConversation(id);
+    if (id === convoId) newChat();
+    refreshHistory();
+  }
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -111,23 +156,33 @@ export default function Assistant() {
     setError(null);
 
     const s = getSettings();
-    const system = await buildSystemPrompt();
-    const priorTurns = messages.map((m) => ({
+    const now = Date.now();
+    const priorMessages = messages;
+    const priorTurns = priorMessages.map((m) => ({
       role: m.role,
       content: m.content,
     }));
 
+    // Retrieve-before-generate: pull relevant bits from past chats + project/
+    // seminar notes and inject them into the single model call's context, so the
+    // assistant can answer from history without a second request.
+    const system = await buildSystemPrompt();
+    const recalled = await recall(text, { excludeConversationId: convoId ?? undefined });
+    const systemWithRecall = recalled.length
+      ? `${system}\n\n${recallContext(recalled)}`
+      : system;
+
     setMessages((m) => [
       ...m,
-      { role: "user", content: text },
-      { role: "assistant", content: "" },
+      { role: "user", content: text, ts: now },
+      { role: "assistant", content: "", ts: now },
     ]);
     setInput("");
     setBusy(true);
 
     const willSpeak = voiceOn;
     const convo: unknown[] = [
-      { role: "system", content: system },
+      { role: "system", content: systemWithRecall },
       ...priorTurns,
       { role: "user", content: text },
     ];
@@ -163,10 +218,36 @@ export default function Assistant() {
           role: "assistant",
           content: finalContent,
           actions: actions.length ? actions : undefined,
+          ts: Date.now(),
         };
         return copy;
       });
       if (willSpeak && finalContent) speak(finalContent);
+
+      // Persist this exchange so it survives restarts and feeds future recall.
+      const stored: StoredMessage[] = [
+        ...priorMessages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          actions: m.actions,
+          ts: m.ts ?? now,
+        })),
+        { role: "user", content: text, ts: now },
+        {
+          role: "assistant",
+          content: finalContent,
+          actions: actions.length ? actions : undefined,
+          ts: Date.now(),
+        },
+      ];
+      const saved = await saveConversation({
+        id: convoId ?? undefined,
+        messages: stored,
+      });
+      if (saved) {
+        setConvoId(saved.id);
+        refreshHistory();
+      }
     } catch (e) {
       const err = e as Error;
       setError(err.message || String(e));
@@ -179,7 +260,9 @@ export default function Assistant() {
   function newChat() {
     stopSpeaking();
     setMessages([]);
+    setConvoId(null);
     setError(null);
+    setShowHistory(false);
   }
 
   function toggleVoice() {
@@ -190,7 +273,66 @@ export default function Assistant() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full">
+      {showHistory && (
+        <aside className="flex w-72 shrink-0 flex-col border-r border-border bg-muted/30">
+          <div className="flex items-center justify-between px-4 py-3.5 border-b border-border">
+            <span className="text-sm font-semibold">History</span>
+            <Button variant="ghost" size="sm" onClick={newChat} title="New chat">
+              <Plus className="size-4" />
+              New
+            </Button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-2">
+            {history.length === 0 ? (
+              <p className="px-2 py-4 text-center text-xs text-muted-foreground">
+                No past chats yet.
+              </p>
+            ) : (
+              <ul className="space-y-1">
+                {history.map((c) => (
+                  <li key={c.id}>
+                    <div
+                      className={cn(
+                        "group flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-accent",
+                        c.id === convoId && "bg-accent",
+                      )}
+                    >
+                      <button
+                        onClick={() => openConversation(c.id)}
+                        className="flex min-w-0 flex-1 items-start gap-2 text-left"
+                      >
+                        <MessageSquare className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0">
+                          <span className="block truncate font-medium">
+                            {c.title}
+                          </span>
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {new Date(c.updatedAt).toLocaleDateString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                            })}{" "}
+                            · {c.messageCount} msg
+                          </span>
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => removeConversation(c.id)}
+                        title="Delete chat"
+                        className="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:text-red-600 group-hover:opacity-100"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </aside>
+      )}
+
+      <div className="flex h-full flex-1 flex-col">
       <div className="flex items-center justify-between border-b border-border px-8 py-4">
         <div className="flex items-center gap-3">
           <Bot className="size-6 text-primary" />
@@ -216,6 +358,15 @@ export default function Assistant() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant={showHistory ? "default" : "outline"}
+            size="sm"
+            onClick={() => setShowHistory((v) => !v)}
+            title="Chat history"
+          >
+            <History className="size-4" />
+            History
+          </Button>
           {ttsSupported() && (
             <Button
               variant={voiceOn ? "default" : "outline"}
@@ -338,6 +489,7 @@ export default function Assistant() {
             {busy ? <Square className="size-4 animate-pulse" /> : <Send className="size-4" />}
           </Button>
         </form>
+      </div>
       </div>
     </div>
   );
