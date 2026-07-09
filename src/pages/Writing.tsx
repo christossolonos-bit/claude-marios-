@@ -7,6 +7,9 @@ import {
   SpellCheck,
   Scissors,
   RefreshCw,
+  ChevronsRight,
+  Expand,
+  Heading,
   Sparkles,
   Check,
   X,
@@ -23,28 +26,42 @@ import {
 } from "@/lib/documents";
 import {
   type EditAction,
+  type Tone,
   ACTION_LABEL,
+  TONES,
   suggestEdit,
+  suggestContinue,
+  suggestExpand,
+  suggestTone,
+  suggestTitle,
 } from "@/lib/writingAssist";
 import { ping } from "@/lib/ollama";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
+type ApplyMode = "replace" | "insert" | "title";
+
 interface Assist {
-  action: EditAction;
+  label: string;
+  apply: ApplyMode;
   start: number;
   end: number;
-  original: string;
-  scope: "selection" | "document";
+  scope: "selection" | "document" | "insertion";
   suggestion: string;
   busy: boolean;
   error: boolean;
 }
 
-const ACTION_ICON: Record<EditAction, typeof SpellCheck> = {
+const EDIT_ICON: Record<EditAction, typeof SpellCheck> = {
   grammar: SpellCheck,
   tighten: Scissors,
   rephrase: RefreshCw,
+};
+
+const APPLY_LABEL: Record<ApplyMode, string> = {
+  replace: "Replace",
+  insert: "Insert",
+  title: "Use as title",
 };
 
 export default function Writing() {
@@ -124,45 +141,139 @@ export default function Writing() {
     if (el) selRef.current = { start: el.selectionStart, end: el.selectionEnd };
   }
 
-  async function runAssist(action: EditAction) {
-    if (!docId) return;
+  function resolveTarget(): {
+    start: number;
+    end: number;
+    scope: "selection" | "document";
+  } {
     let { start, end } = selRef.current;
-    if (start === end) {
-      // Nothing selected → act on the whole document.
-      start = 0;
-      end = body.length;
-    }
-    const original = body.slice(start, end);
-    if (!original.trim()) return;
-    const scope = start === 0 && end === body.length ? "document" : "selection";
+    if (start === end) return { start: 0, end: body.length, scope: "document" };
+    return { start, end, scope: "selection" };
+  }
 
+  async function startAssist(cfg: {
+    label: string;
+    apply: ApplyMode;
+    start: number;
+    end: number;
+    scope: Assist["scope"];
+    generate: (
+      onToken: (t: string) => void,
+      signal: AbortSignal,
+    ) => Promise<void>;
+  }) {
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
     setAssist({
-      action,
-      start,
-      end,
-      original,
-      scope,
+      label: cfg.label,
+      apply: cfg.apply,
+      start: cfg.start,
+      end: cfg.end,
+      scope: cfg.scope,
       suggestion: "",
       busy: true,
       error: false,
     });
-
     try {
-      await suggestEdit({
-        action,
-        text: original,
-        signal: ac.signal,
-        onToken: (t) =>
-          setAssist((a) => (a ? { ...a, suggestion: a.suggestion + t } : a)),
-      });
+      await cfg.generate(
+        (t) => setAssist((a) => (a ? { ...a, suggestion: t } : a)),
+        ac.signal,
+      );
       setAssist((a) => (a ? { ...a, busy: false } : a));
     } catch {
       if (ac.signal.aborted) return;
       setAssist((a) => (a ? { ...a, busy: false, error: true } : a));
     }
+  }
+
+  // Streamers accumulate tokens; startAssist's onToken gets the full text so far.
+  function streamer(
+    fn: (o: {
+      signal: AbortSignal;
+      onToken: (t: string) => void;
+    }) => Promise<void>,
+  ) {
+    return (setText: (t: string) => void, signal: AbortSignal) => {
+      let acc = "";
+      return fn({
+        signal,
+        onToken: (t) => {
+          acc += t;
+          setText(acc.trimStart());
+        },
+      });
+    };
+  }
+
+  function runEdit(action: EditAction) {
+    if (!docId) return;
+    const { start, end, scope } = resolveTarget();
+    const original = body.slice(start, end);
+    if (!original.trim()) return;
+    startAssist({
+      label: ACTION_LABEL[action],
+      apply: "replace",
+      start,
+      end,
+      scope,
+      generate: streamer((o) => suggestEdit({ action, text: original, ...o })),
+    });
+  }
+
+  function runExpand() {
+    if (!docId) return;
+    const { start, end, scope } = resolveTarget();
+    const original = body.slice(start, end);
+    if (!original.trim()) return;
+    startAssist({
+      label: "Expand",
+      apply: "replace",
+      start,
+      end,
+      scope,
+      generate: streamer((o) => suggestExpand({ text: original, ...o })),
+    });
+  }
+
+  function runTone(tone: Tone) {
+    if (!docId) return;
+    const { start, end, scope } = resolveTarget();
+    const original = body.slice(start, end);
+    if (!original.trim()) return;
+    startAssist({
+      label: `Tone: ${tone}`,
+      apply: "replace",
+      start,
+      end,
+      scope,
+      generate: streamer((o) => suggestTone({ text: original, tone, ...o })),
+    });
+  }
+
+  function runContinue() {
+    if (!docId || !body.trim()) return;
+    const at = selRef.current.end || body.length;
+    startAssist({
+      label: "Continue",
+      apply: "insert",
+      start: at,
+      end: at,
+      scope: "insertion",
+      generate: streamer((o) => suggestContinue({ body, ...o })),
+    });
+  }
+
+  function runTitle() {
+    if (!docId || !body.trim()) return;
+    startAssist({
+      label: "Suggest title",
+      apply: "title",
+      start: 0,
+      end: 0,
+      scope: "document",
+      generate: streamer((o) => suggestTitle({ body, ...o })),
+    });
   }
 
   function stopAssist() {
@@ -172,8 +283,17 @@ export default function Writing() {
 
   function acceptAssist() {
     if (!assist) return;
-    const suggestion = assist.suggestion.trim();
-    setBody(body.slice(0, assist.start) + suggestion + body.slice(assist.end));
+    const s = assist.suggestion.trim();
+    if (assist.apply === "title") {
+      setTitle(s.replace(/^["']|["']$/g, ""));
+    } else if (assist.apply === "insert") {
+      const before = body.slice(0, assist.start);
+      const after = body.slice(assist.start);
+      const sep = before && !/\s$/.test(before) ? " " : "";
+      setBody(before + sep + s + after);
+    } else {
+      setBody(body.slice(0, assist.start) + s + body.slice(assist.end));
+    }
     setAssist(null);
   }
 
@@ -184,6 +304,12 @@ export default function Writing() {
 
   const words = countWords(body);
   const assistDisabled = !docId || online === false || !!assist?.busy;
+  const scopeText =
+    assist?.scope === "insertion"
+      ? "continues your draft"
+      : assist?.scope === "document"
+        ? "whole document"
+        : "selected text";
 
   return (
     <div className="flex h-full">
@@ -249,35 +375,86 @@ export default function Writing() {
       <div className="flex h-full min-w-0 flex-1 flex-col">
         {docId ? (
           <>
-            <div className="flex items-center gap-4 border-b border-border px-8 py-4">
+            <div className="border-b border-border px-8 py-4">
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Untitled"
-                className="min-w-0 flex-1 bg-transparent text-2xl font-semibold tracking-tight placeholder:text-muted-foreground/50 focus:outline-none"
+                className="w-full bg-transparent text-2xl font-semibold tracking-tight placeholder:text-muted-foreground/50 focus:outline-none"
               />
-              <div className="flex shrink-0 items-center gap-1">
-                {(Object.keys(ACTION_LABEL) as EditAction[]).map((a) => {
-                  const Icon = ACTION_ICON[a];
-                  return (
-                    <Button
-                      key={a}
-                      variant="outline"
-                      size="sm"
-                      onClick={() => runAssist(a)}
-                      disabled={assistDisabled}
-                      title={
-                        online === false
-                          ? "Ollama offline"
-                          : `${ACTION_LABEL[a]} (selection, or whole document)`
-                      }
-                    >
-                      <Icon className="size-4" />
-                      {ACTION_LABEL[a]}
-                    </Button>
-                  );
-                })}
-              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1 border-b border-border px-8 py-2">
+              {(Object.keys(ACTION_LABEL) as EditAction[]).map((a) => {
+                const Icon = EDIT_ICON[a];
+                return (
+                  <Button
+                    key={a}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => runEdit(a)}
+                    disabled={assistDisabled}
+                    title={
+                      online === false
+                        ? "Ollama offline"
+                        : `${ACTION_LABEL[a]} (selection, or whole document)`
+                    }
+                  >
+                    <Icon className="size-4" />
+                    {ACTION_LABEL[a]}
+                  </Button>
+                );
+              })}
+
+              <span className="mx-1 h-5 w-px bg-border" />
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={runContinue}
+                disabled={assistDisabled}
+                title="Continue the draft from the cursor"
+              >
+                <ChevronsRight className="size-4" />
+                Continue
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={runExpand}
+                disabled={assistDisabled}
+                title="Expand the selection (or whole document)"
+              >
+                <Expand className="size-4" />
+                Expand
+              </Button>
+              <select
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) runTone(e.target.value as Tone);
+                  e.target.value = "";
+                }}
+                disabled={assistDisabled}
+                title="Rewrite the selection in a tone"
+                className="h-8 rounded-md border border-border bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+              >
+                <option value="">Tone…</option>
+                {TONES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={runTitle}
+                disabled={assistDisabled}
+                title="Suggest a title from the draft"
+              >
+                <Heading className="size-4" />
+                Title
+              </Button>
             </div>
 
             <div className="flex-1 overflow-y-auto">
@@ -299,12 +476,9 @@ export default function Writing() {
                   <div className="flex items-center justify-between border-b border-border px-3 py-2">
                     <div className="flex items-center gap-2 text-sm font-medium">
                       <Sparkles className="size-4 text-primary" />
-                      {ACTION_LABEL[assist.action]}
+                      {assist.label}
                       <span className="text-xs font-normal text-muted-foreground">
-                        ·{" "}
-                        {assist.scope === "document"
-                          ? "whole document"
-                          : "selected text"}
+                        · {scopeText}
                       </span>
                     </div>
                     {assist.busy && (
@@ -314,7 +488,7 @@ export default function Writing() {
                       </Button>
                     )}
                   </div>
-                  <div className="max-h-52 overflow-y-auto px-3 py-2 text-sm leading-7 whitespace-pre-wrap">
+                  <div className="max-h-52 overflow-y-auto whitespace-pre-wrap px-3 py-2 text-sm leading-7">
                     {assist.error ? (
                       <span className="text-red-600">
                         Couldn't reach the model. Is Ollama running?
@@ -333,10 +507,12 @@ export default function Writing() {
                     <Button
                       size="sm"
                       onClick={acceptAssist}
-                      disabled={assist.busy || assist.error || !assist.suggestion.trim()}
+                      disabled={
+                        assist.busy || assist.error || !assist.suggestion.trim()
+                      }
                     >
                       <Check className="size-4" />
-                      Replace
+                      {APPLY_LABEL[assist.apply]}
                     </Button>
                   </div>
                 </div>

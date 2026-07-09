@@ -1,7 +1,7 @@
-// AI writing assist — local Ollama edits on a selection (or the whole draft).
-// Streams the revised text back; the editor shows it as a suggestion the author
-// accepts or discards. Language-agnostic: it replies in the text's own language
-// (the book may be drafted in another language before translation).
+// AI writing assist — local Ollama edits and generation on a selection (or the
+// whole draft). Streams text back; the editor shows it as a suggestion the
+// author accepts or discards. Language-agnostic: it replies in the text's own
+// language (the book may be drafted in another language before translation).
 
 import { streamChat, type ChatMessage } from "./ollama";
 import { getSettings } from "./settings";
@@ -14,6 +14,9 @@ export const ACTION_LABEL: Record<EditAction, string> = {
   rephrase: "Rephrase",
 };
 
+export const TONES = ["Warmer", "More formal", "Simpler", "More vivid"] as const;
+export type Tone = (typeof TONES)[number];
+
 const INSTRUCTIONS: Record<EditAction, string> = {
   grammar:
     "Correct spelling, grammar, and punctuation. Keep the author's wording and voice — change as little as you can.",
@@ -23,24 +26,84 @@ const INSTRUCTIONS: Record<EditAction, string> = {
     "Rephrase this so it reads more smoothly and clearly, preserving the meaning and the author's voice.",
 };
 
-const SYSTEM =
+const EDIT_SYSTEM =
   "You are a precise copy editor helping a book author. Return ONLY the revised text — no explanations, notes, quotation marks, or preamble. Respond in the same language as the input text.";
 
-export async function suggestEdit(opts: {
-  action: EditAction;
-  text: string;
+const WRITE_SYSTEM =
+  "You are a writing partner for a book author. Write in the author's own voice and style, matching the language of their text. Return ONLY the requested prose — no explanations, notes, quotation marks, or preamble.";
+
+interface StreamOpts {
   signal?: AbortSignal;
   onToken: (t: string) => void;
-}): Promise<void> {
-  const model = getSettings().model;
+}
+
+async function stream(
+  system: string,
+  user: string,
+  opts: StreamOpts,
+): Promise<void> {
   const messages: ChatMessage[] = [
-    { role: "system", content: SYSTEM },
-    { role: "user", content: `${INSTRUCTIONS[opts.action]}\n\nText:\n${opts.text}` },
+    { role: "system", content: system },
+    { role: "user", content: user },
   ];
   await streamChat({
-    model,
+    model: getSettings().model,
     messages,
     signal: opts.signal,
     onToken: opts.onToken,
   });
+}
+
+// --- Corrections (increment 2) ---------------------------------------------
+
+export function suggestEdit(
+  opts: { action: EditAction; text: string } & StreamOpts,
+): Promise<void> {
+  return stream(
+    EDIT_SYSTEM,
+    `${INSTRUCTIONS[opts.action]}\n\nText:\n${opts.text}`,
+    opts,
+  );
+}
+
+// --- Generation (increment 3) ----------------------------------------------
+
+export function suggestContinue(
+  opts: { body: string } & StreamOpts,
+): Promise<void> {
+  return stream(
+    WRITE_SYSTEM,
+    `Continue this draft naturally from where it stops — about 2-4 sentences. Do not repeat what is already written.\n\n${opts.body}`,
+    opts,
+  );
+}
+
+export function suggestExpand(
+  opts: { text: string } & StreamOpts,
+): Promise<void> {
+  return stream(
+    WRITE_SYSTEM,
+    `Expand this passage with more detail, texture, or an example, keeping the meaning and voice:\n\n${opts.text}`,
+    opts,
+  );
+}
+
+export function suggestTone(
+  opts: { text: string; tone: Tone } & StreamOpts,
+): Promise<void> {
+  return stream(
+    EDIT_SYSTEM,
+    `Rewrite this to be ${opts.tone.toLowerCase()}, preserving the meaning:\n\n${opts.text}`,
+    opts,
+  );
+}
+
+export function suggestTitle(
+  opts: { body: string } & StreamOpts,
+): Promise<void> {
+  return stream(
+    "You suggest one clear, evocative title for the author's piece. Return ONLY the title on a single line — no quotation marks, no 'Title:' prefix. Match the language of the text.",
+    `Suggest a title for this:\n\n${opts.body}`,
+    opts,
+  );
 }
