@@ -6,6 +6,8 @@ export interface Settings {
   persona: string;
   useContext: boolean;
   currency: string;
+  fishApiKey: string;
+  fishVoiceId: string;
 }
 
 export const DEFAULT_PERSONA = `You are the personal AI assistant and coaching thought-partner for a writer who is also a life coach. Help him organize his day, develop seminar and talk ideas, plan his book's promotion, and think through coaching content. Be warm, encouraging, and practical. Give concrete, actionable suggestions, and ask a clarifying question when it genuinely helps. Keep replies concise and well-structured.`;
@@ -15,6 +17,8 @@ const DEFAULTS: Settings = {
   persona: DEFAULT_PERSONA,
   useContext: true,
   currency: "$",
+  fishApiKey: "",
+  fishVoiceId: "96c28df4a43b4c45970a72c210ecbf54",
 };
 
 const KEY = "authorhub.settings.v1";

@@ -106,6 +106,37 @@ export default function Settings() {
 
         <Card>
           <CardHeader>
+            <CardTitle>Voice (Fish Audio)</CardTitle>
+            <CardDescription>
+              A higher-quality cloud voice. Note: when this is set, the reply
+              text is sent to Fish Audio's servers to be spoken. Leave the API
+              key blank to use the free, offline local voice.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div>
+              <label className="text-sm font-medium">API key</label>
+              <Input
+                type="password"
+                value={settings.fishApiKey}
+                onChange={(e) => update({ fishApiKey: e.target.value })}
+                className="mt-1"
+                placeholder="Fish Audio API key (stored only on this device)"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Voice ID</label>
+              <Input
+                value={settings.fishVoiceId}
+                onChange={(e) => update({ fishVoiceId: e.target.value })}
+                className="mt-1"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <CardTitle>Coach persona</CardTitle>
             <CardDescription>
               The system prompt that shapes how your assistant behaves.
