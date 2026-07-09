@@ -17,6 +17,7 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card";
+import CoachMemoryCard from "@/components/CoachMemoryCard";
 
 const selectClass =
   "flex h-9 w-full rounded-md border border-border bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -157,6 +158,8 @@ export default function Settings() {
             </Button>
           </CardContent>
         </Card>
+
+        <CoachMemoryCard />
 
         <div className="flex items-center gap-3">
           <Button onClick={save}>

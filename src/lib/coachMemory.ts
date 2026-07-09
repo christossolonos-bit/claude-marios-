@@ -37,6 +37,12 @@ export async function addMemory(text: string): Promise<void> {
   write(items);
 }
 
+export async function editMemory(id: string, text: string): Promise<void> {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  write(read().map((m) => (m.id === id ? { ...m, text: trimmed } : m)));
+}
+
 export async function deleteMemory(id: string): Promise<void> {
   write(read().filter((m) => m.id !== id));
 }
