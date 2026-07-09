@@ -45,6 +45,18 @@ async function buildSystemPrompt(): Promise<string> {
     day: "numeric",
   })} (${today}).`;
 
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const dateRef: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    const d = new Date(now);
+    d.setDate(now.getDate() + i);
+    const iso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const wd = d.toLocaleDateString(undefined, { weekday: "long" });
+    const rel = i === 0 ? " (today)" : i === 1 ? " (tomorrow)" : "";
+    dateRef.push(`${wd} = ${iso}${rel}`);
+  }
+  const dateRefLine = `Date reference for resolving days:\n${dateRef.join("\n")}`;
+
   const toolsLine =
     "You can manage the app for the user with tools: add tasks/reminders, add projects, add seminar ideas, complete or remove tasks, and remember durable facts about them. Call a tool whenever they ask to add, schedule, complete, remove, or note something. Resolve relative dates (like 'tomorrow') to absolute YYYY-MM-DD. After acting, confirm briefly and naturally.";
 
@@ -66,6 +78,7 @@ async function buildSystemPrompt(): Promise<string> {
   return [
     s.persona,
     dateLine,
+    dateRefLine,
     toolsLine,
     memoryContext(memories),
     workLines.length ? `The user's current work:\n${workLines.join("\n")}` : "",
@@ -122,37 +135,27 @@ export default function Assistant() {
     let finalContent = "";
 
     try {
-      for (let i = 0; i < 5; i++) {
-        const msg: AssistantMessage = await chat({
-          model: s.model,
-          messages: convo,
-          tools: TOOLS,
-        });
+      // One request per message: the model replies once, we run any actions it
+      // asked for, and confirm with chips. No follow-up round (avoids stacking
+      // requests / hitting rate limits).
+      const msg: AssistantMessage = await chat({
+        model: s.model,
+        messages: convo,
+        tools: TOOLS,
+      });
 
-        if (msg.tool_calls && msg.tool_calls.length) {
-          convo.push({
-            role: "assistant",
-            content: msg.content ?? "",
-            tool_calls: msg.tool_calls,
-          });
-          for (const tc of msg.tool_calls) {
-            const rawArgs = tc.function.arguments;
-            const parsed =
-              typeof rawArgs === "string"
-                ? safeParse(rawArgs)
-                : (rawArgs ?? {});
-            const result = await executeTool(tc.function.name, parsed);
-            actions.push(result);
-            convo.push({ role: "tool", content: result });
-          }
-          continue;
+      if (msg.tool_calls && msg.tool_calls.length) {
+        for (const tc of msg.tool_calls) {
+          const rawArgs = tc.function.arguments;
+          const parsed =
+            typeof rawArgs === "string" ? safeParse(rawArgs) : (rawArgs ?? {});
+          const result = await executeTool(tc.function.name, parsed);
+          actions.push(result);
         }
-
-        finalContent = msg.content ?? "";
-        break;
       }
 
-      if (!finalContent) finalContent = actions.length ? "Done." : "";
+      finalContent = msg.content ?? "";
+      if (!finalContent && actions.length) finalContent = "Done.";
 
       setMessages((m) => {
         const copy = m.slice();
