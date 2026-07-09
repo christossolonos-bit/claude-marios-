@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Settings as SettingsIcon, Save } from "lucide-react";
+import { Settings as SettingsIcon, Save, Trash2, ShieldAlert } from "lucide-react";
 import {
   type Settings as AppSettings,
   getSettings,
@@ -10,6 +10,8 @@ import { getModels } from "@/lib/ollama";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Dialog } from "@/components/ui/dialog";
+import { clearCoachMemory, eraseAllData } from "@/lib/reset";
 import {
   Card,
   CardHeader,
@@ -27,6 +29,7 @@ export default function Settings() {
   const [models, setModels] = useState<string[]>([]);
   const [modelsError, setModelsError] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [confirm, setConfirm] = useState<null | "memory" | "all">(null);
 
   useEffect(() => {
     getModels()
@@ -42,6 +45,16 @@ export default function Settings() {
   function save() {
     saveSettings(settings);
     setSaved(true);
+  }
+
+  function runConfirm() {
+    if (confirm === "memory") {
+      clearCoachMemory();
+      window.location.reload();
+    } else if (confirm === "all") {
+      eraseAllData();
+      window.location.href = "/";
+    }
   }
 
   const modelOptions = models.length ? models : [settings.model];
@@ -193,7 +206,79 @@ export default function Settings() {
           </Button>
           {saved && <span className="text-sm text-green-600">Saved ✓</span>}
         </div>
+
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldAlert className="size-5 text-red-500" />
+              Data &amp; privacy
+            </CardTitle>
+            <CardDescription>
+              Everything lives on this device. Clear it out — for example, before
+              handing the app to someone else.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm">
+                <div className="font-medium">Clear coach memory</div>
+                <div className="text-muted-foreground">
+                  Forget the facts the assistant has learned about you.
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirm("memory")}
+              >
+                <Trash2 className="size-4" />
+                Clear memory
+              </Button>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+              <div className="text-sm">
+                <div className="font-medium">Erase all data</div>
+                <div className="text-muted-foreground">
+                  Delete all tasks, projects, seminars, writing, chats, memory,
+                  and settings — a clean slate for a new person.
+                </div>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => setConfirm("all")}
+                className="bg-red-600 text-white hover:bg-red-700"
+              >
+                <Trash2 className="size-4" />
+                Erase everything
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
+
+      <Dialog open={confirm !== null} onClose={() => setConfirm(null)}>
+        <h2 className="mb-2 text-lg font-semibold">
+          {confirm === "all" ? "Erase all data?" : "Clear coach memory?"}
+        </h2>
+        <p className="mb-5 text-sm text-muted-foreground">
+          {confirm === "all"
+            ? "This permanently deletes everything in the app on this device — tasks, projects, seminars, documents, chats, learned memory, and settings. This can't be undone."
+            : "This permanently forgets everything the assistant has learned about you. Your tasks, projects, and writing are kept. This can't be undone."}
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={() => setConfirm(null)}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={runConfirm}
+            className="bg-red-600 text-white hover:bg-red-700"
+          >
+            <Trash2 className="size-4" />
+            {confirm === "all" ? "Erase everything" : "Clear memory"}
+          </Button>
+        </div>
+      </Dialog>
     </div>
   );
 }
