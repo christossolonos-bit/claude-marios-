@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Bundled Whisper voice-input assets (fetched by scripts/setup-whisper.mjs)
+public/models/
+public/ort/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

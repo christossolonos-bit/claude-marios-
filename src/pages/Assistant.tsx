@@ -13,6 +13,8 @@ import {
   Plus,
   Trash2,
   MessageSquare,
+  Mic,
+  Loader2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -35,6 +37,8 @@ import {
 import { recall, recallContext } from "@/lib/recall";
 import { todayISO, formatTimeLabel } from "@/lib/date";
 import { speak, stopSpeaking, ttsSupported } from "@/lib/tts";
+import { transcribe } from "@/lib/whisper";
+import { AudioRecorder, isRecordingSupported } from "@/lib/recorder";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -145,8 +149,12 @@ export default function Assistant() {
   const [convoId, setConvoId] = useState<string | null>(null);
   const [history, setHistory] = useState<ConversationSummary[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const recorderRef = useRef<AudioRecorder | null>(null);
   const model = getSettings().model;
+  const voiceInput = isRecordingSupported();
 
   useEffect(() => {
     ping().then(setOnline);
@@ -309,6 +317,44 @@ export default function Assistant() {
       if (v) stopSpeaking();
       return !v;
     });
+  }
+
+  // Record a voice message, transcribe it locally with Whisper, and drop the
+  // text into the composer for the user to review and send.
+  async function startRecording() {
+    if (busy || transcribing) return;
+    setError(null);
+    const rec = new AudioRecorder();
+    try {
+      await rec.start();
+      recorderRef.current = rec;
+      setRecording(true);
+    } catch {
+      setError(
+        "Couldn't access the microphone. Check that recording is allowed.",
+      );
+    }
+  }
+
+  async function stopRecording() {
+    const rec = recorderRef.current;
+    if (!rec) return;
+    setRecording(false);
+    setTranscribing(true);
+    try {
+      const blob = await rec.stop();
+      const text = await transcribe(blob);
+      if (text) {
+        setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+      } else {
+        setError("Didn't catch any speech — try recording again.");
+      }
+    } catch (e) {
+      setError((e as Error).message || "Transcription failed.");
+    } finally {
+      recorderRef.current = null;
+      setTranscribing(false);
+    }
   }
 
   return (
@@ -504,6 +550,21 @@ export default function Assistant() {
             Start Ollama and make sure your model is pulled, then try again.
           </p>
         )}
+        {(recording || transcribing) && (
+          <p className="mb-2 flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
+            {recording ? (
+              <>
+                <span className="inline-block size-2 animate-pulse rounded-full bg-red-500" />
+                Recording… tap the mic to stop.
+              </>
+            ) : (
+              <>
+                <Loader2 className="size-3.5 animate-spin" />
+                Transcribing your message…
+              </>
+            )}
+          </p>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -524,6 +585,24 @@ export default function Assistant() {
             placeholder="Message your coach…"
             className="max-h-40 min-h-[40px] flex-1 resize-none rounded-md border border-border bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
+          {voiceInput && (
+            <Button
+              type="button"
+              variant={recording ? "default" : "outline"}
+              onClick={recording ? stopRecording : startRecording}
+              disabled={busy || transcribing}
+              title={recording ? "Stop and transcribe" : "Record a voice message"}
+              className={cn(recording && "bg-red-500 hover:bg-red-600")}
+            >
+              {transcribing ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : recording ? (
+                <Square className="size-4" />
+              ) : (
+                <Mic className="size-4" />
+              )}
+            </Button>
+          )}
           <Button type="submit" disabled={!input.trim() || busy}>
             {busy ? <Square className="size-4 animate-pulse" /> : <Send className="size-4" />}
           </Button>
