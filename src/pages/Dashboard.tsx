@@ -7,16 +7,19 @@ import {
   CardContent,
   CardDescription,
 } from "@/components/ui/card";
-import { CalendarDays, LineChart, Lightbulb, Bot } from "lucide-react";
+import { CalendarDays, PenLine, Flame, Bot } from "lucide-react";
 import { type Task, listTasks } from "@/lib/tasks";
+import { getStats, type WritingStats } from "@/lib/writingGoal";
 import { todayISO, formatTimeLabel } from "@/lib/date";
 import DailyBriefing from "@/components/DailyBriefing";
 
 export default function Dashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [writing, setWriting] = useState<WritingStats>(() => getStats());
 
   useEffect(() => {
     listTasks().then(setTasks);
+    setWriting(getStats());
   }, []);
 
   const today = todayISO();
@@ -31,12 +34,17 @@ export default function Dashboard() {
       icon: CalendarDays,
       hint: "Open in Schedule",
     },
-    { label: "Books sold", value: "—", icon: LineChart, hint: "Sales module" },
     {
-      label: "Seminar ideas",
-      value: "—",
-      icon: Lightbulb,
-      hint: "Seminars module",
+      label: "Words today",
+      value: String(writing.today),
+      icon: PenLine,
+      hint: `Goal ${writing.goal}`,
+    },
+    {
+      label: "Writing streak",
+      value: writing.streak ? `${writing.streak} day${writing.streak === 1 ? "" : "s"}` : "—",
+      icon: Flame,
+      hint: "Days hitting your goal",
     },
     { label: "Assistant", value: "qwen3.5:4b", icon: Bot, hint: "Local Ollama" },
   ];
