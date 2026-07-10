@@ -66,7 +66,8 @@ export default function Settings() {
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
       </div>
       <p className="mb-6 text-muted-foreground">
-        Configure your local AI assistant. Everything stays on your machine.
+        Configure your AI assistant. Your data stays on this device; only the
+        text you send is passed to your chosen AI provider.
       </p>
 
       <div className="space-y-6">
@@ -74,23 +75,74 @@ export default function Settings() {
           <CardHeader>
             <CardTitle>Assistant model</CardTitle>
             <CardDescription>
-              {modelsError
-                ? "Couldn't reach Ollama — is it running?"
-                : "Runs locally via Ollama, auto-detected from your installed models."}
+              Run the assistant locally (free, offline) or in the cloud via
+              OpenRouter (no install, works on any device — good for a hosted
+              deployment).
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <select
-              value={settings.model}
-              onChange={(e) => update({ model: e.target.value })}
-              className={selectClass}
-            >
-              {modelOptions.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
+            <div>
+              <label className="text-sm font-medium">AI provider</label>
+              <select
+                value={settings.provider}
+                onChange={(e) =>
+                  update({ provider: e.target.value as AppSettings["provider"] })
+                }
+                className={`${selectClass} mt-1`}
+              >
+                <option value="ollama">Local — Ollama (offline, free)</option>
+                <option value="openrouter">Cloud — OpenRouter (API key)</option>
+              </select>
+            </div>
+
+            {settings.provider === "ollama" ? (
+              <div>
+                <label className="text-sm font-medium">Model</label>
+                <select
+                  value={settings.model}
+                  onChange={(e) => update({ model: e.target.value })}
+                  className={`${selectClass} mt-1`}
+                >
+                  {modelOptions.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {modelsError
+                    ? "Couldn't reach Ollama — is it running?"
+                    : "Auto-detected from your installed Ollama models."}
+                </p>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <label className="text-sm font-medium">
+                    OpenRouter API key
+                  </label>
+                  <Input
+                    type="password"
+                    value={settings.openrouterApiKey}
+                    onChange={(e) =>
+                      update({ openrouterApiKey: e.target.value })
+                    }
+                    className="mt-1"
+                    placeholder="sk-or-... (stored only on this device)"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Get one at openrouter.ai. Requests go to OpenRouter's
+                    servers.
+                  </p>
+                </div>
+                <div className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                  Uses <code>openrouter/free</code> — OpenRouter automatically
+                  picks a suitable free model for each request, so there are no
+                  charges. (Free tier allows ~20 requests per minute.)
+                </div>
+              </>
+            )}
+
             <label className="flex items-start gap-2 text-sm">
               <input
                 type="checkbox"

@@ -11,6 +11,8 @@ import {
   Copy,
   Check,
   ExternalLink,
+  KeyRound,
+  Settings as SettingsIcon,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ping, getModels } from "@/lib/ollama";
@@ -78,16 +80,26 @@ function CommandLine({ cmd }: { cmd: string }) {
 }
 
 export default function Setup() {
-  const [ollama, setOllama] = useState<Check>("checking");
-  const [modelOk, setModelOk] = useState<Check>("checking");
-  const model = getSettings().model;
+  const settings = getSettings();
+  const isCloud = settings.provider === "openrouter";
+  const model = settings.model;
   const voiceSupported = isRecordingSupported();
 
+  // "providerUp" means: Ollama is reachable (local) or a key is set (cloud).
+  const [providerUp, setProviderUp] = useState<Check>("checking");
+  const [modelOk, setModelOk] = useState<Check>("checking");
+
   async function refresh() {
-    setOllama("checking");
+    setProviderUp("checking");
     setModelOk("checking");
+    if (isCloud) {
+      // Cloud readiness = an OpenRouter key is set. (Don't use ping() here: with
+      // no key it falls back to probing local Ollama, which can false-positive.)
+      setProviderUp(getSettings().openrouterApiKey.trim() ? "ok" : "missing");
+      return;
+    }
     const up = await ping();
-    setOllama(up ? "ok" : "missing");
+    setProviderUp(up ? "ok" : "missing");
     if (!up) {
       setModelOk("missing");
       return;
@@ -107,6 +119,7 @@ export default function Setup() {
 
   useEffect(() => {
     refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -116,72 +129,119 @@ export default function Setup() {
         <h1 className="text-2xl font-semibold tracking-tight">Getting started</h1>
       </div>
       <p className="mb-6 text-muted-foreground">
-        AuthorHub runs its AI entirely on this computer. Two quick, free
-        one-time installs and you're set — everything stays private on the
-        machine.
+        {isCloud
+          ? "AuthorHub is set to use OpenRouter (cloud). Add your API key and you're ready — no downloads or installs."
+          : "AuthorHub runs its AI entirely on this computer. Two quick, free one-time installs and you're set — everything stays private on the machine."}
       </p>
 
       <div className="space-y-4">
-        {/* Step 1 — Ollama */}
-        <Card>
-          <CardContent className="pt-5">
-            <div className="flex items-start gap-4">
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <Download className="size-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="font-semibold">1. Install Ollama</h2>
-                  <StatusPill
-                    state={ollama}
-                    label={ollama === "ok" ? "Connected" : "Not running"}
-                  />
+        {isCloud ? (
+          /* Cloud — a single API-key step */
+          <Card>
+            <CardContent className="pt-5">
+              <div className="flex items-start gap-4">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <KeyRound className="size-5" />
                 </div>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Ollama is the free engine that runs the assistant locally.
-                  Download it, install, and leave it running in the background.
-                </p>
-                <div className="mt-3 flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => openExternal("https://ollama.com/download")}
-                  >
-                    <ExternalLink className="size-4" />
-                    Download Ollama
-                  </Button>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="font-semibold">1. Add your OpenRouter API key</h2>
+                    <StatusPill
+                      state={providerUp}
+                      label={providerUp === "ok" ? "Key set" : "No key yet"}
+                    />
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Create a free key at OpenRouter, then paste it into Settings.
+                    The assistant uses <code>openrouter/free</code>, which picks a
+                    free model for each request — no charges.
+                  </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => openExternal("https://openrouter.ai/keys")}
+                    >
+                      <ExternalLink className="size-4" />
+                      Get an API key
+                    </Button>
+                    <Link
+                      to="/settings"
+                      className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+                    >
+                      <SettingsIcon className="size-4" />
+                      Open Settings
+                    </Link>
+                  </div>
                 </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        ) : (
+          <>
+            {/* Step 1 — Ollama */}
+            <Card>
+              <CardContent className="pt-5">
+                <div className="flex items-start gap-4">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <Download className="size-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <h2 className="font-semibold">1. Install Ollama</h2>
+                      <StatusPill
+                        state={providerUp}
+                        label={providerUp === "ok" ? "Connected" : "Not running"}
+                      />
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Ollama is the free engine that runs the assistant locally.
+                      Download it, install, and leave it running in the
+                      background.
+                    </p>
+                    <div className="mt-3 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openExternal("https://ollama.com/download")}
+                      >
+                        <ExternalLink className="size-4" />
+                        Download Ollama
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
-        {/* Step 2 — model */}
-        <Card>
-          <CardContent className="pt-5">
-            <div className="flex items-start gap-4">
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <Cpu className="size-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="font-semibold">2. Add the AI model</h2>
-                  <StatusPill
-                    state={modelOk}
-                    label={modelOk === "ok" ? "Installed" : "Missing"}
-                  />
+            {/* Step 2 — model */}
+            <Card>
+              <CardContent className="pt-5">
+                <div className="flex items-start gap-4">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <Cpu className="size-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <h2 className="font-semibold">2. Add the AI model</h2>
+                      <StatusPill
+                        state={modelOk}
+                        label={modelOk === "ok" ? "Installed" : "Missing"}
+                      />
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Once Ollama is running, open a terminal and pull the model
+                      the assistant uses ({model}). It downloads once.
+                    </p>
+                    <CommandLine cmd={`ollama pull ${model}`} />
+                  </div>
                 </div>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Once Ollama is running, open a terminal and pull the model the
-                  assistant uses ({model}). It downloads once.
-                </p>
-                <CommandLine cmd={`ollama pull ${model}`} />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          </>
+        )}
 
-        {/* Step 3 — voice (optional) */}
+        {/* Voice (optional) — same for both providers */}
         <Card>
           <CardContent className="pt-5">
             <div className="flex items-start gap-4">
@@ -191,7 +251,7 @@ export default function Setup() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-3">
                   <h2 className="font-semibold">
-                    3. Voice input{" "}
+                    {isCloud ? "2" : "3"}. Voice input{" "}
                     <span className="font-normal text-muted-foreground">
                       (optional)
                     </span>
@@ -202,10 +262,10 @@ export default function Setup() {
                   />
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  The mic button in the Assistant lets you speak instead of
-                  type. The first time you use it, the app downloads a small
-                  speech model (~75MB) once — after that it works fully offline.
-                  Allow microphone access when asked.
+                  The mic button in the Assistant lets you speak instead of type.
+                  The first time you use it, the app downloads a small speech
+                  model (~75MB) once — after that it works fully offline. Allow
+                  microphone access when asked.
                 </p>
               </div>
             </div>
@@ -215,7 +275,9 @@ export default function Setup() {
 
       <div className="mt-6 flex items-center gap-3">
         <Button variant="outline" onClick={refresh}>
-          <Loader2 className={cn("size-4", ollama === "checking" && "animate-spin")} />
+          <Loader2
+            className={cn("size-4", providerUp === "checking" && "animate-spin")}
+          />
           Re-check
         </Button>
         <Link to="/assistant" className={cn(buttonVariants())}>

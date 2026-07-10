@@ -1,8 +1,13 @@
 // App settings — persisted in localStorage. Keeps the assistant's model and
 // life-coach persona. Sync semantics can change later without touching callers.
 
+export type Provider = "ollama" | "openrouter";
+
 export interface Settings {
-  model: string;
+  provider: Provider; // where the assistant runs: local Ollama or cloud OpenRouter
+  model: string; // Ollama model name (used when provider = "ollama")
+  openrouterApiKey: string; // OpenRouter key (used when provider = "openrouter")
+  openrouterModel: string; // OpenRouter model id — only free (:free) models are offered
   persona: string;
   useContext: boolean;
   currency: string;
@@ -17,7 +22,10 @@ export interface Settings {
 export const DEFAULT_PERSONA = `You are the personal AI assistant and coaching thought-partner for a writer who is also a life coach. Help him organize his day, develop seminar and talk ideas, plan his book's promotion, and think through coaching content. Be warm, encouraging, and practical. Give concrete, actionable suggestions, and ask a clarifying question when it genuinely helps. Keep replies concise and well-structured.`;
 
 const DEFAULTS: Settings = {
+  provider: "ollama",
   model: "qwen3.5:4b",
+  openrouterApiKey: "",
+  openrouterModel: "openrouter/free",
   persona: DEFAULT_PERSONA,
   useContext: true,
   currency: "$",
