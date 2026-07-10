@@ -12,6 +12,7 @@ import Skills from "@/pages/Skills";
 import Sales from "@/pages/Sales";
 import Marketing from "@/pages/Marketing";
 import MediaKit from "@/pages/MediaKit";
+import Setup from "@/pages/Setup";
 import Settings from "@/pages/Settings";
 
 export default function App() {
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="sales" element={<Sales />} />
         <Route path="marketing" element={<Marketing />} />
         <Route path="media-kit" element={<MediaKit />} />
+        <Route path="setup" element={<Setup />} />
         <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>

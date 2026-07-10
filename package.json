@@ -4,10 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "setup:whisper": "node scripts/setup-whisper.mjs",
-    "predev": "node scripts/setup-whisper.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/setup-whisper.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"

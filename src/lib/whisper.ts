@@ -1,8 +1,9 @@
-// Local speech-to-text with Whisper, running entirely inside the app via
-// transformers.js (WebAssembly). The model and the ONNX runtime are bundled
-// in the app (public/models + public/ort), so this needs no Python, no ffmpeg,
-// no external binary, and no network — the recorded audio never leaves the
-// machine. Works the same in the browser preview and the packaged desktop app.
+// Local speech-to-text with Whisper, running inside the app via transformers.js
+// (WebAssembly) — no Python, no ffmpeg, no external binary. To keep the
+// installer small, the ~75MB model isn't bundled: it's downloaded once on the
+// first voice use and then cached, so every later use is fully offline and the
+// recorded audio itself never leaves the machine. Needs internet only that
+// first time. Works the same in the browser preview and the desktop app.
 
 import type { Pipeline } from "@xenova/transformers";
 
@@ -18,17 +19,17 @@ let asrPromise: Promise<Pipeline> | null = null;
 let configured = false;
 
 // Import transformers.js on demand (it's ~1.4MB) so app startup stays light —
-// the library only loads the first time voice input is used. Points it at our
-// bundled model + wasm so nothing is ever fetched from the network.
+// the library only loads the first time voice input is used.
 async function getPipelineFactory() {
   const tf = await import("@xenova/transformers");
   if (!configured) {
-    tf.env.allowRemoteModels = false;
-    tf.env.allowLocalModels = true;
-    tf.env.localModelPath = "/models/";
-    // Serve the ONNX runtime wasm from our own bundle, single-threaded so we
-    // don't depend on SharedArrayBuffer / cross-origin-isolation headers.
-    tf.env.backends.onnx.wasm.wasmPaths = "/ort/";
+    // Fetch the model from the hub on first use; transformers.js caches it so
+    // subsequent runs are offline.
+    tf.env.allowLocalModels = false;
+    tf.env.allowRemoteModels = true;
+    tf.env.useBrowserCache = true;
+    // Single-threaded runtime so we don't depend on SharedArrayBuffer /
+    // cross-origin-isolation headers.
     tf.env.backends.onnx.wasm.numThreads = 1;
     configured = true;
   }

@@ -12,6 +12,7 @@ import {
   LineChart,
   Megaphone,
   BookOpen,
+  Rocket,
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,7 @@ const nav = [
   { to: "/sales", label: "Sales", icon: LineChart },
   { to: "/marketing", label: "Marketing", icon: Megaphone },
   { to: "/media-kit", label: "Media Kit", icon: BookOpen },
+  { to: "/setup", label: "Setup", icon: Rocket },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
