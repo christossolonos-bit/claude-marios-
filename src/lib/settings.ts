@@ -25,7 +25,7 @@ const DEFAULTS: Settings = {
   provider: "ollama",
   model: "qwen3.5:4b",
   openrouterApiKey: "",
-  openrouterModel: "openrouter/free",
+  openrouterModel: "meta-llama/llama-3.3-70b-instruct:free",
   persona: DEFAULT_PERSONA,
   useContext: true,
   currency: "$",
@@ -42,7 +42,16 @@ const KEY = "authorhub.settings.v1";
 export function getSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) } : DEFAULTS;
+    const s = raw
+      ? { ...DEFAULTS, ...(JSON.parse(raw) as Partial<Settings>) }
+      : DEFAULTS;
+    // Heal legacy setting: "openrouter/free" routes to random free models,
+    // including a content-safety classifier that replies with junk like
+    // "User Safety: safe". Pin a reliable instruction-following model instead.
+    if (s.openrouterModel === "openrouter/free") {
+      s.openrouterModel = DEFAULTS.openrouterModel;
+    }
+    return s;
   } catch {
     return DEFAULTS;
   }

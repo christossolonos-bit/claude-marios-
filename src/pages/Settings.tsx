@@ -6,7 +6,7 @@ import {
   saveSettings,
   DEFAULT_PERSONA,
 } from "@/lib/settings";
-import { getModels } from "@/lib/ollama";
+import { getModels, getOpenRouterFreeModels } from "@/lib/ollama";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -28,6 +28,8 @@ export default function Settings() {
   const [settings, setSettings] = useState<AppSettings>(getSettings());
   const [models, setModels] = useState<string[]>([]);
   const [modelsError, setModelsError] = useState(false);
+  const [freeModels, setFreeModels] = useState<string[]>([]);
+  const [freeModelsError, setFreeModelsError] = useState(false);
   const [saved, setSaved] = useState(false);
   const [confirm, setConfirm] = useState<null | "memory" | "all">(null);
 
@@ -36,6 +38,18 @@ export default function Settings() {
       .then(setModels)
       .catch(() => setModelsError(true));
   }, []);
+
+  // Load OpenRouter's usable free models once the cloud provider is selected,
+  // so the dropdown only offers reliable, no-cost chat models.
+  useEffect(() => {
+    if (settings.provider !== "openrouter" || freeModels.length) return;
+    getOpenRouterFreeModels()
+      .then((m) => {
+        setFreeModels(m);
+        setFreeModelsError(false);
+      })
+      .catch(() => setFreeModelsError(true));
+  }, [settings.provider, freeModels.length]);
 
   function update(patch: Partial<AppSettings>) {
     setSettings((s) => ({ ...s, ...patch }));
@@ -58,6 +72,14 @@ export default function Settings() {
   }
 
   const modelOptions = models.length ? models : [settings.model];
+  // Always keep the saved model selectable, and float the recommended default
+  // (Llama 3.3 70B) to the top of the list.
+  const RECOMMENDED = "meta-llama/llama-3.3-70b-instruct:free";
+  const orModelOptions = (
+    freeModels.includes(settings.openrouterModel)
+      ? freeModels
+      : [settings.openrouterModel, ...freeModels]
+  ).sort((a, b) => (a === RECOMMENDED ? -1 : b === RECOMMENDED ? 1 : 0));
 
   return (
     <div className="mx-auto max-w-3xl p-8">
@@ -135,10 +157,45 @@ export default function Settings() {
                     servers.
                   </p>
                 </div>
-                <div className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-                  Uses <code>openrouter/free</code> — OpenRouter automatically
-                  picks a suitable free model for each request, so there are no
-                  charges. (Free tier allows ~20 requests per minute.)
+                <div>
+                  <label className="text-sm font-medium">Model (free only)</label>
+                  {freeModelsError ? (
+                    <>
+                      <Input
+                        value={settings.openrouterModel}
+                        onChange={(e) =>
+                          update({ openrouterModel: e.target.value })
+                        }
+                        className="mt-1"
+                        placeholder="meta-llama/llama-3.3-70b-instruct:free"
+                      />
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Couldn't load the model list. Enter a free model id
+                        ending in <code>:free</code> from openrouter.ai/models.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <select
+                        value={settings.openrouterModel}
+                        onChange={(e) =>
+                          update({ openrouterModel: e.target.value })
+                        }
+                        className={`${selectClass} mt-1`}
+                      >
+                        {orModelOptions.map((m) => (
+                          <option key={m} value={m}>
+                            {m === RECOMMENDED ? `${m} (recommended)` : m}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {freeModels.length
+                          ? "Only free models are shown — no charges. Free tier allows ~20 requests/min; if one model is busy, pick another."
+                          : "Loading free models…"}
+                      </p>
+                    </>
+                  )}
                 </div>
               </>
             )}

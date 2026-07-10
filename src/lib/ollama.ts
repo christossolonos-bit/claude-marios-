@@ -181,6 +181,37 @@ export async function ping(): Promise<boolean> {
   }
 }
 
+// Non-conversational free models we never want to offer: the content-safety
+// classifier (returns "User Safety: safe"), reasoning/thinking models (stream
+// raw chain-of-thought), and coder/vision/omni variants that ignore normal
+// chat instructions. Matched against the model id.
+const OR_EXCLUDE = /content-safety|reasoning|thinking|guard|coder|-vl|-omni/;
+
+// OpenRouter's model catalog, filtered to free (":free", priced 0) chat models,
+// minus the non-conversational ones above. The /models endpoint is public — no
+// key needed. Populates the Settings dropdown so only usable models are shown.
+export async function getOpenRouterFreeModels(): Promise<string[]> {
+  const r = await fetch(`${OR_BASE}/models`);
+  if (!r.ok) throw new Error(`OpenRouter responded ${r.status}`);
+  const j = (await r.json()) as {
+    data?: {
+      id: string;
+      pricing?: { prompt?: string; completion?: string };
+    }[];
+  };
+  return (j.data ?? [])
+    .filter(
+      (m) =>
+        m.id.endsWith(":free") &&
+        !OR_EXCLUDE.test(m.id) &&
+        m.pricing &&
+        Number(m.pricing.prompt) === 0 &&
+        Number(m.pricing.completion) === 0,
+    )
+    .map((m) => m.id)
+    .sort();
+}
+
 export async function getModels(): Promise<string[]> {
   if (useOpenRouter()) {
     const m = getSettings().openrouterModel.trim();

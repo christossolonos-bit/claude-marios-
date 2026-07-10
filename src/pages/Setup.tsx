@@ -153,8 +153,8 @@ export default function Setup() {
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     Create a free key at OpenRouter, then paste it into Settings.
-                    The assistant uses <code>openrouter/free</code>, which picks a
-                    free model for each request — no charges.
+                    The assistant uses a free model (no charges) — you can pick
+                    which one in Settings.
                   </p>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <Button
