@@ -1,14 +1,13 @@
 // Daily briefing — the assistant as a personal secretary. When the app opens it
 // greets the author by name, reads out today, and proposes the next actions to
-// move his plans forward. Generated locally by Ollama from a structured glance
-// at his tasks/projects/seminars, with a factual fallback when offline. Cached
+// move his book forward. Generated locally by Ollama from a structured glance at
+// his tasks and writing progress, with a factual fallback when offline. Cached
 // per app session (sessionStorage) so it fires on launch, not every visit.
 
 import { streamChat, type ChatMessage } from "./ollama";
 import { getSettings } from "./settings";
 import { listTasks } from "./tasks";
-import { listProjects } from "./projects";
-import { listSeminars } from "./seminars";
+import { getStats } from "./writingGoal";
 import { listMemories } from "./coachMemory";
 import { todayISO, formatTimeLabel } from "./date";
 
@@ -34,19 +33,13 @@ interface Briefing {
   name: string;
   todayTasks: { title: string; time: string | null; priority: string }[];
   overdue: { title: string; date: string }[];
-  activeProjects: { name: string; due: string | null; late: boolean }[];
-  openSeminars: string[];
+  writing: { today: number; goal: number; streak: number };
   memories: string[];
 }
 
 async function gather(): Promise<Briefing> {
   const s = getSettings();
-  const [tasks, projects, seminars, memories] = await Promise.all([
-    listTasks(),
-    listProjects(),
-    listSeminars(),
-    listMemories(),
-  ]);
+  const [tasks, memories] = await Promise.all([listTasks(), listMemories()]);
   const today = todayISO();
 
   const todayTasks = tasks
@@ -59,24 +52,13 @@ async function gather(): Promise<Briefing> {
     .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""))
     .map((t) => ({ title: t.title, date: t.date as string }));
 
-  const activeProjects = projects
-    .filter((p) => p.status === "active")
-    .map((p) => ({
-      name: p.name,
-      due: p.dueDate,
-      late: !!p.dueDate && p.dueDate < today,
-    }));
-
-  const openSeminars = seminars
-    .filter((s) => s.status === "idea" || s.status === "developing")
-    .map((s) => s.title);
+  const st = getStats();
 
   return {
     name: s.ownerName.trim(),
     todayTasks,
     overdue,
-    activeProjects,
-    openSeminars,
+    writing: { today: st.today, goal: st.goal, streak: st.streak },
     memories: memories.slice(0, 3).map((m) => m.text),
   };
 }
@@ -97,20 +79,23 @@ function fallbackBriefing(b: Briefing): string {
   if (b.overdue.length)
     lines.push(`**Overdue:** ${b.overdue.slice(0, 3).map((t) => t.title).join("; ")}.`);
 
-  if (b.activeProjects.length) {
-    const items = b.activeProjects
-      .slice(0, 3)
-      .map((p) => (p.late ? `${p.name} (past due)` : p.name));
-    lines.push(`**Active projects:** ${items.join("; ")}.`);
+  if (b.writing.today >= b.writing.goal && b.writing.goal > 0) {
+    lines.push(
+      `**Writing:** ${b.writing.today} words today — goal met${
+        b.writing.streak > 1 ? `, ${b.writing.streak}-day streak 🔥` : ""
+      }.`,
+    );
+  } else {
+    lines.push(`**Writing:** ${b.writing.today}/${b.writing.goal} words today.`);
   }
 
   return lines.join("\n\n");
 }
 
 const SYSTEM =
-  "You are a sharp, warm personal secretary briefing your employer — a writer and life coach — as he opens his desktop app. Speak to him directly. In a few short lines: greet him (by name only if a name is given below), give a quick read on today, then propose the 2-3 most useful next actions to move his plans forward. " +
-  "CRITICAL: use ONLY the facts provided below. Never invent tasks, projects, ideas, names, numbers, or details, and never assume a name. If there are no tasks and no projects or ideas, do not fabricate any — just greet him warmly in a line or two and invite him to add something or ask for help. " +
-  "When there is real work, be specific — reference his actual tasks, projects, and ideas, and put anything overdue or time-sensitive first. Use compact markdown: a short greeting line, then a tight bulleted list of next steps. Write each bullet as one short, self-contained action phrased as an imperative the way it would read on a to-do list (e.g. \"Call the publisher about the audiobook\") — no bold label prefixes like \"Priority:\" and no trailing explanation. Warm, concrete, and brief — no filler, no 'here is your briefing' preamble.";
+  "You are a sharp, warm personal assistant briefing an author as he opens his desktop writing app. Speak to him directly. In a few short lines: greet him (by name only if a name is given below), give a quick read on today, then propose the 2-3 most useful next actions to move his book forward. " +
+  "CRITICAL: use ONLY the facts provided below. Never invent tasks, names, numbers, or details, and never assume a name. If there are no tasks and no writing progress, do not fabricate any — just greet him warmly in a line or two and encourage him to write or ask for help. " +
+  "When there is real work, be specific — reference his actual tasks and writing progress, and put anything overdue or time-sensitive first. Encourage his writing. Use compact markdown: a short greeting line, then a tight bulleted list of next steps. Write each bullet as one short, self-contained action phrased as an imperative the way it would read on a to-do list (e.g. \"Draft the next chapter opening\") — no bold label prefixes like \"Priority:\" and no trailing explanation. Warm, concrete, and brief — no filler, no 'here is your briefing' preamble.";
 
 function facts(b: Briefing): string {
   const L: string[] = [`Time of day: ${greetingTime()}.`];
@@ -129,14 +114,11 @@ function facts(b: Briefing): string {
   );
   if (b.overdue.length)
     L.push(`Overdue tasks: ${b.overdue.map((t) => t.title).join("; ")}.`);
-  if (b.activeProjects.length)
-    L.push(
-      `Active projects: ${b.activeProjects
-        .map((p) => `${p.name}${p.late ? " (past due date)" : p.due ? ` (due ${p.due})` : ""}`)
-        .join("; ")}.`,
-    );
-  if (b.openSeminars.length)
-    L.push(`Seminar ideas in progress: ${b.openSeminars.join("; ")}.`);
+  L.push(
+    `Writing today: ${b.writing.today} of his ${b.writing.goal}-word daily goal${
+      b.writing.streak > 0 ? `, current streak ${b.writing.streak} day(s)` : ""
+    }.`,
+  );
   if (b.memories.length) L.push(`Things you know about him: ${b.memories.join("; ")}.`);
   return L.join("\n");
 }

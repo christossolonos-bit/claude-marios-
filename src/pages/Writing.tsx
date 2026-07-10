@@ -15,6 +15,7 @@ import {
   X,
   Square,
   Flame,
+  Bot,
 } from "lucide-react";
 import {
   type DocSummary,
@@ -37,15 +38,35 @@ import {
   suggestTitle,
 } from "@/lib/writingAssist";
 import { ping } from "@/lib/ollama";
-import { type Project, listProjects } from "@/lib/projects";
 import {
   type WritingStats,
   getStats,
   setGoal,
   recordWords,
 } from "@/lib/writingGoal";
+import { getSettings } from "@/lib/settings";
+import TabAssistant from "@/components/TabAssistant";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+// System prompt for the docked Writing assistant — scoped to the open document
+// so it can discuss the actual draft. Talk-only: it advises, it doesn't edit
+// (the toolbar buttons handle edits).
+function writingSystem(title: string, body: string): string {
+  const s = getSettings();
+  const doc = body.trim();
+  const excerpt = doc.length > 6000 ? `${doc.slice(0, 6000)}\n…(truncated)` : doc;
+  return [
+    s.persona,
+    "You are the writing companion for one document in the author's workspace. Help him write it: brainstorm ideas, talk through structure, characters and arguments, give focused feedback, and suggest phrasings when asked. Keep it a conversation — do NOT silently rewrite the whole draft, and always reply in the language the draft is written in.",
+    title ? `The document is titled "${title}".` : "The document is untitled.",
+    doc
+      ? `Here is the current draft so he doesn't have to paste it:\n"""\n${excerpt}\n"""`
+      : "The draft is empty so far — help him find a way in.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 type ApplyMode = "replace" | "insert" | "title";
 
@@ -81,8 +102,7 @@ export default function Writing() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [assist, setAssist] = useState<Assist | null>(null);
   const [stats, setStats] = useState<WritingStats>(() => getStats());
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const [showAI, setShowAI] = useState(false);
 
   const loadedId = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -97,7 +117,6 @@ export default function Writing() {
   useEffect(() => {
     refreshList();
     ping().then(setOnline);
-    listProjects().then(setProjects);
   }, []);
 
   async function openDoc(id: string) {
@@ -108,7 +127,6 @@ export default function Writing() {
     setDocId(doc.id);
     setTitle(doc.title);
     setBody(doc.body);
-    setProjectId(doc.projectId);
     setSavedAt(doc.updatedAt);
   }
 
@@ -120,13 +138,7 @@ export default function Writing() {
     setDocId(doc.id);
     setTitle("");
     setBody("");
-    setProjectId(null);
     setSavedAt(null);
-  }
-
-  function changeProject(id: string | null) {
-    setProjectId(id);
-    if (docId) updateDocument(docId, { projectId: id });
   }
 
   async function removeDoc(id: string) {
@@ -241,13 +253,6 @@ export default function Writing() {
     });
   }
 
-  function writeContext(): string | undefined {
-    const p = projects.find((pr) => pr.id === projectId);
-    if (!p) return undefined;
-    const d = p.description.trim();
-    return `the project "${p.name}"${d ? ` — ${d}` : ""}`;
-  }
-
   function runExpand() {
     if (!docId) return;
     const { start, end, scope } = resolveTarget();
@@ -260,7 +265,7 @@ export default function Writing() {
       end,
       scope,
       generate: streamer((o) =>
-        suggestExpand({ text: original, context: writeContext(), ...o }),
+        suggestExpand({ text: original, ...o }),
       ),
     });
   }
@@ -290,7 +295,7 @@ export default function Writing() {
       end: at,
       scope: "insertion",
       generate: streamer((o) =>
-        suggestContinue({ body, context: writeContext(), ...o }),
+        suggestContinue({ body, ...o }),
       ),
     });
   }
@@ -304,7 +309,7 @@ export default function Writing() {
       end: 0,
       scope: "document",
       generate: streamer((o) =>
-        suggestTitle({ body, context: writeContext(), ...o }),
+        suggestTitle({ body, ...o }),
       ),
     });
   }
@@ -455,19 +460,15 @@ export default function Writing() {
                 placeholder="Untitled"
                 className="min-w-0 flex-1 bg-transparent text-2xl font-semibold tracking-tight placeholder:text-muted-foreground/50 focus:outline-none"
               />
-              <select
-                value={projectId ?? ""}
-                onChange={(e) => changeProject(e.target.value || null)}
-                title="Link this document to a project to write about"
-                className="h-9 max-w-52 shrink-0 rounded-md border border-border bg-background px-2 text-sm text-muted-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              <Button
+                variant={showAI ? "default" : "outline"}
+                size="sm"
+                onClick={() => setShowAI((v) => !v)}
+                title="Writing assistant — talk through your draft"
               >
-                <option value="">No project</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
+                <Bot className="size-4" />
+                Assistant
+              </Button>
             </div>
 
             <div className="flex flex-wrap items-center gap-1 border-b border-border px-8 py-2">
@@ -632,6 +633,27 @@ export default function Writing() {
           </div>
         )}
       </div>
+
+      {showAI && (
+        <TabAssistant
+          title="Writing assistant"
+          subtitle={
+            docId
+              ? "Talk through the document you have open."
+              : "Open a document to discuss it."
+          }
+          storageKey={docId ? `writing.${docId}` : "writing.none"}
+          buildSystem={() => writingSystem(title, body)}
+          online={online}
+          placeholder="Ask about this draft…"
+          starters={[
+            "What's working and what's weak here?",
+            "Help me brainstorm where this goes next.",
+            "Suggest three stronger opening lines.",
+          ]}
+          onClose={() => setShowAI(false)}
+        />
+      )}
     </div>
   );
 }

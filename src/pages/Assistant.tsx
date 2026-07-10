@@ -15,18 +15,15 @@ import {
   MessageSquare,
   Mic,
   Loader2,
-  Wand2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { type AssistantMessage, chat, ping } from "@/lib/ollama";
-import { TOOLS, executeTool, type ProposedSkill } from "@/lib/assistantTools";
+import { streamChat, ping, type ChatMessage } from "@/lib/ollama";
 import { getSettings } from "@/lib/settings";
 import { listTasks } from "@/lib/tasks";
-import { listProjects, statusMeta } from "@/lib/projects";
-import { listSeminars } from "@/lib/seminars";
-import { listSkills, createSkill } from "@/lib/skills";
-import { capabilityCatalog } from "@/lib/skillCapabilities";
+import { listDocuments } from "@/lib/documents";
+import { listDecks } from "@/lib/decks";
+import { getManuscript } from "@/lib/manuscript";
 import { listMemories, memoryContext } from "@/lib/coachMemory";
 import {
   type ConversationSummary,
@@ -53,13 +50,13 @@ interface UiMessage {
 
 async function buildSystemPrompt(): Promise<string> {
   const s = getSettings();
-  const [tasks, projects, seminars, skills, memories] = await Promise.all([
+  const [tasks, memories, docs, decks] = await Promise.all([
     listTasks(),
-    listProjects(),
-    listSeminars(),
-    listSkills(),
     listMemories(),
+    listDocuments(),
+    listDecks(),
   ]);
+  const manuscript = getManuscript();
   const today = todayISO();
   const now = new Date();
   const dateLine = `Today is ${now.toLocaleDateString(undefined, {
@@ -81,8 +78,8 @@ async function buildSystemPrompt(): Promise<string> {
   }
   const dateRefLine = `Date reference for resolving days:\n${dateRef.join("\n")}`;
 
-  const toolsLine =
-    "You are this app's control center — you can organize everything in it for the user with tools: add tasks/reminders, update or reschedule tasks, complete or remove tasks, add projects, update a project's status or due date, capture seminar ideas, run one of the user's saved Skills on some text, create a brand-new Skill when they describe a text task they'll want to repeat, and remember durable facts about them. Call a tool whenever they ask to add, schedule, change, complete, remove, note, run, or build something. When they describe a repeatable way they want text handled (e.g. \"I often need to turn my notes into a LinkedIn post\" or \"make a skill that fixes my Greek grammar\"), create a Skill for it. Resolve relative dates (like 'tomorrow') to absolute YYYY-MM-DD. After acting, confirm briefly and naturally. When the user is only asking a question or recalling something (e.g. \"what was my … idea?\"), just answer in prose from what you know — do NOT call the remember tool unless they are giving you genuinely new information.";
+  const roleLine =
+    "You are his thinking partner and brainstorming companion — for his book, his day, and his plans. Talk WITH him: explore ideas, help him think things through, give honest and specific feedback, and ask good questions. This is conversation, not task-running. You do NOT take actions or change anything in the app — you cannot add, edit, schedule, complete, or delete tasks, documents, notes, or anything else. If he asks you to add or change something, say so plainly and point him to the right place (the Schedule tab manages tasks and reminders; each tab has its own assistant for its work), then help him think it through. You have read-only awareness of his work below so you can talk about it when it's relevant — draw on it, but never claim to have modified it.";
 
   const workLines: string[] = [];
   if (s.useContext) {
@@ -108,37 +105,32 @@ async function buildSystemPrompt(): Promise<string> {
       workLines.push("Upcoming tasks:");
       for (const t of upcoming) workLines.push(`${taskLine(t)} — ${t.date}`);
     }
-    if (projects.length) {
-      workLines.push("Projects:");
-      for (const p of projects)
-        workLines.push(`- ${p.name} (${statusMeta[p.status].label})`);
+
+    if (docs.length) {
+      workLines.push("Writing documents:");
+      for (const d of docs.slice(0, 8))
+        workLines.push(`- "${d.title || "Untitled"}" (${d.wordCount} words)`);
     }
-    const inProgress = seminars.filter(
-      (s) => s.status === "developing" || s.status === "ready",
-    );
-    if (inProgress.length)
+    if (manuscript) {
+      const bookWords = manuscript.pages.join(" ").trim().split(/\s+/).filter(Boolean).length;
       workLines.push(
-        `Seminars in progress: ${inProgress.map((s) => s.title).join(", ")}`,
+        `Book manuscript: "${manuscript.title || "Untitled"}" — ${manuscript.pages.length} pages, ~${bookWords} words.`,
       );
+    }
+    if (decks.length) {
+      workLines.push("Presentation decks:");
+      for (const d of decks.slice(0, 8))
+        workLines.push(`- "${d.title || "Untitled"}" (${d.slideCount} slides)`);
+    }
   }
-
-  const skillsLine = skills.length
-    ? `The user's saved Skills you can run with run_skill: ${skills
-        .map((sk) => sk.name)
-        .join(", ")}.`
-    : "";
-
-  const capabilitiesLine = `Built-in capability ids for create_skill action skills:\n${capabilityCatalog()}`;
 
   return [
     s.persona,
     dateLine,
     dateRefLine,
-    toolsLine,
-    skillsLine,
-    capabilitiesLine,
+    roleLine,
     memoryContext(memories),
-    workLines.length ? `The user's current work:\n${workLines.join("\n")}` : "",
+    workLines.length ? `What he's working on (read-only):\n${workLines.join("\n")}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -156,9 +148,9 @@ export default function Assistant() {
   const [showHistory, setShowHistory] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
-  const [pendingSkills, setPendingSkills] = useState<ProposedSkill[]>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const recorderRef = useRef<AudioRecorder | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const model = getSettings().model;
   const voiceInput = isRecordingSupported();
 
@@ -229,55 +221,42 @@ export default function Assistant() {
     setBusy(true);
 
     const willSpeak = voiceOn;
-    const convo: unknown[] = [
+    const convo: ChatMessage[] = [
       { role: "system", content: systemWithRecall },
       ...priorTurns,
       { role: "user", content: text },
     ];
-    const actions: string[] = [];
-    const generated: string[] = [];
-    const proposed: ProposedSkill[] = [];
-    let finalContent = "";
 
+    // Talk-only: stream the reply straight into the last bubble. No tools, no
+    // actions — this assistant is for conversation and brainstorming.
+    const ac = new AbortController();
+    abortRef.current = ac;
+    let acc = "";
     try {
-      // One request per message: the model replies once, we run any actions it
-      // asked for, and confirm with chips. No follow-up round (avoids stacking
-      // requests / hitting rate limits).
-      const msg: AssistantMessage = await chat({
+      await streamChat({
         model: s.model,
         messages: convo,
-        tools: TOOLS,
+        signal: ac.signal,
+        onToken: (t) => {
+          acc += t;
+          setMessages((m) => {
+            const copy = m.slice();
+            copy[copy.length - 1] = {
+              role: "assistant",
+              content: acc.trimStart(),
+              ts: copy[copy.length - 1]?.ts ?? now,
+            };
+            return copy;
+          });
+        },
       });
 
-      if (msg.tool_calls && msg.tool_calls.length) {
-        for (const tc of msg.tool_calls) {
-          const rawArgs = tc.function.arguments;
-          const parsed =
-            typeof rawArgs === "string" ? safeParse(rawArgs) : (rawArgs ?? {});
-          const result = await executeTool(tc.function.name, parsed);
-          if (result.summary) actions.push(result.summary);
-          // Some tools (e.g. run_skill) generate text to show in the reply body.
-          if (result.content) generated.push(result.content);
-          // create_skill proposes a skill that needs the user's approval.
-          if (result.pendingSkill) proposed.push(result.pendingSkill);
-        }
-      }
-
-      finalContent = msg.content ?? "";
-      if (generated.length)
-        finalContent = [finalContent, ...generated].filter(Boolean).join("\n\n");
-      if (!finalContent && proposed.length)
-        finalContent =
-          "I've prepared a new skill for you — approve it below to install it.";
-      if (!finalContent && actions.length) finalContent = "Done.";
-      if (proposed.length) setPendingSkills((p) => [...p, ...proposed]);
-
+      const finalContent = acc.trim();
       setMessages((m) => {
         const copy = m.slice();
         copy[copy.length - 1] = {
           role: "assistant",
           content: finalContent,
-          actions: actions.length ? actions : undefined,
           ts: Date.now(),
         };
         return copy;
@@ -293,12 +272,7 @@ export default function Assistant() {
           ts: m.ts ?? now,
         })),
         { role: "user", content: text, ts: now },
-        {
-          role: "assistant",
-          content: finalContent,
-          actions: actions.length ? actions : undefined,
-          ts: Date.now(),
-        },
+        { role: "assistant", content: finalContent, ts: Date.now() },
       ];
       const saved = await saveConversation({
         id: convoId ?? undefined,
@@ -309,6 +283,7 @@ export default function Assistant() {
         refreshHistory();
       }
     } catch (e) {
+      if (ac.signal.aborted) return; // user stopped — keep the partial reply
       const err = e as Error;
       setError(err.message || String(e));
       setMessages((m) => m.slice(0, -1)); // drop the empty assistant bubble
@@ -317,13 +292,17 @@ export default function Assistant() {
     }
   }
 
+  function stopStreaming() {
+    abortRef.current?.abort();
+    setBusy(false);
+  }
+
   function newChat() {
     stopSpeaking();
     setMessages([]);
     setConvoId(null);
     setError(null);
     setShowHistory(false);
-    setPendingSkills([]);
   }
 
   function toggleVoice() {
@@ -369,27 +348,6 @@ export default function Assistant() {
       recorderRef.current = null;
       setTranscribing(false);
     }
-  }
-
-  // Install a skill the assistant proposed, after the user approves it.
-  async function installSkill(index: number) {
-    const ps = pendingSkills[index];
-    if (!ps) return;
-    await createSkill(ps);
-    setPendingSkills((p) => p.filter((_, i) => i !== index));
-    setMessages((m) => [
-      ...m,
-      {
-        role: "assistant",
-        content: "",
-        actions: [`Installed skill: ${ps.emoji} ${ps.name}`],
-        ts: Date.now(),
-      },
-    ]);
-  }
-
-  function dismissSkill(index: number) {
-    setPendingSkills((p) => p.filter((_, i) => i !== index));
   }
 
   return (
@@ -513,10 +471,11 @@ export default function Assistant() {
         {messages.length === 0 && (
           <div className="mx-auto mt-10 max-w-md text-center text-sm text-muted-foreground">
             <Bot className="mx-auto mb-3 size-8 text-muted-foreground/50" />
-            Your local life-coach assistant. Ask it to plan your day, brainstorm a
-            seminar, or draft ideas — or just say{" "}
-            <span className="italic">"remind me to call the publisher at 3pm"</span>{" "}
-            and it'll add it for you.
+            Your thinking partner. Talk through your book, your day, or an idea —
+            brainstorm, get honest feedback, work a problem out loud. It knows
+            what you're working on, but it won't change anything. To add or
+            reschedule tasks, use the{" "}
+            <span className="italic">Schedule</span> tab's assistant.
           </div>
         )}
         {messages.map((m, i) => (
@@ -569,48 +528,6 @@ export default function Assistant() {
                   …
                 </div>
               )}
-          </div>
-        ))}
-        {pendingSkills.map((ps, i) => (
-          <div
-            key={`pending-${i}`}
-            className="rounded-xl border border-primary/40 bg-primary/5 p-4"
-          >
-            <div className="flex items-center gap-2">
-              <Wand2 className="size-4 text-primary" />
-              <span className="text-sm font-medium text-muted-foreground">
-                New skill to install
-              </span>
-              <span className="ml-auto rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
-                {ps.kind === "function" ? "action" : "prompt"}
-              </span>
-            </div>
-            <div className="mt-2 flex items-center gap-2 text-base font-semibold">
-              <span className="text-lg">{ps.emoji}</span>
-              {ps.name}
-            </div>
-            {ps.description && (
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                {ps.description}
-              </p>
-            )}
-            <p className="mt-2 text-xs text-muted-foreground">
-              Install this skill so you and the assistant can use it? It's saved
-              locally and you can edit or remove it anytime in Skills.
-            </p>
-            <div className="mt-3 flex gap-2">
-              <Button size="sm" onClick={() => installSkill(i)}>
-                <Check className="size-4" />
-                Install
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => dismissSkill(i)}
-              >
-                Dismiss
-              </Button>
-            </div>
           </div>
         ))}
         {error && (
@@ -680,20 +597,18 @@ export default function Assistant() {
               )}
             </Button>
           )}
-          <Button type="submit" disabled={!input.trim() || busy}>
-            {busy ? <Square className="size-4 animate-pulse" /> : <Send className="size-4" />}
-          </Button>
+          {busy ? (
+            <Button type="button" variant="outline" onClick={stopStreaming} title="Stop">
+              <Square className="size-4" />
+            </Button>
+          ) : (
+            <Button type="submit" disabled={!input.trim()}>
+              <Send className="size-4" />
+            </Button>
+          )}
         </form>
       </div>
       </div>
     </div>
   );
-}
-
-function safeParse(s: string): Record<string, unknown> {
-  try {
-    return JSON.parse(s) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
 }
