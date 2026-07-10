@@ -45,9 +45,12 @@ import {
   recordWords,
 } from "@/lib/writingGoal";
 import { getSettings } from "@/lib/settings";
+import { predictContinuation } from "@/lib/autocomplete";
 import TabAssistant from "@/components/TabAssistant";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+type RightPanel = "none" | "chat";
 
 // System prompt for the docked Writing assistant — scoped to the open document
 // so it can discuss the actual draft. Talk-only: it advises, it doesn't edit
@@ -102,7 +105,12 @@ export default function Writing() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [assist, setAssist] = useState<Assist | null>(null);
   const [stats, setStats] = useState<WritingStats>(() => getStats());
-  const [showAI, setShowAI] = useState(false);
+  const [rightPanel, setRightPanel] = useState<RightPanel>("none");
+  const [ghostOn, setGhostOn] = useState(false);
+  const [ghost, setGhost] = useState("");
+
+  const ghostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ghostAbort = useRef<AbortController | null>(null);
 
   const loadedId = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -168,9 +176,91 @@ export default function Writing() {
     };
   }, [title, body, docId]);
 
+  function clearGhost() {
+    if (ghostTimer.current) clearTimeout(ghostTimer.current);
+    ghostAbort.current?.abort();
+    setGhost("");
+  }
+
+  // Inline autocomplete: while enabled and the caret is at the very end of the
+  // draft, debounce after a pause in typing and predict the next few words as
+  // grey ghost text. Tab accepts it; typing or moving the caret dismisses it.
+  useEffect(() => {
+    if (!ghostOn || !docId || online === false) return;
+    const el = bodyRef.current;
+    const atEnd =
+      !!el && el.selectionStart === el.selectionEnd && el.selectionEnd >= body.length;
+    if (!atEnd || body.trim().length < 3) return;
+    if (ghostTimer.current) clearTimeout(ghostTimer.current);
+    ghostTimer.current = setTimeout(async () => {
+      ghostAbort.current?.abort();
+      const ac = new AbortController();
+      ghostAbort.current = ac;
+      const snapshot = body;
+      try {
+        const raw = await predictContinuation(snapshot.slice(-1500), ac.signal);
+        if (ac.signal.aborted) return;
+        // Only show if the draft hasn't changed while we were predicting.
+        if (bodyRef.current && bodyRef.current.value !== snapshot) return;
+        const g = raw.trim();
+        if (!g) return;
+        const needsSpace = !/\s$/.test(snapshot) && /^[\w("'‘“]/.test(g);
+        setGhost((needsSpace ? " " : "") + g);
+      } catch {
+        // model unreachable / aborted — no ghost
+      }
+    }, 700);
+    return () => {
+      if (ghostTimer.current) clearTimeout(ghostTimer.current);
+    };
+  }, [body, ghostOn, docId, online]);
+
+  // Clear the ghost when switching documents or turning autocomplete off.
+  useEffect(() => {
+    clearGhost();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docId, ghostOn]);
+
+  function acceptGhost() {
+    if (!ghost) return;
+    const next = body + ghost;
+    setBody(next);
+    setGhost("");
+    requestAnimationFrame(() => {
+      const el = bodyRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(next.length, next.length);
+        selRef.current = { start: next.length, end: next.length };
+      }
+    });
+  }
+
+  function onEditorKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (ghost && e.key === "Tab") {
+      e.preventDefault();
+      acceptGhost();
+    } else if (ghost && e.key === "Escape") {
+      e.preventDefault();
+      clearGhost();
+    }
+  }
+
+  function togglePanel(panel: "chat") {
+    setRightPanel((cur) => (cur === panel ? "none" : panel));
+  }
+
   function trackSelection() {
     const el = bodyRef.current;
-    if (el) selRef.current = { start: el.selectionStart, end: el.selectionEnd };
+    if (!el) return;
+    selRef.current = { start: el.selectionStart, end: el.selectionEnd };
+    // Drop a stale ghost if the caret is no longer at the end of the draft.
+    if (
+      ghost &&
+      (el.selectionStart !== el.selectionEnd || el.selectionEnd < body.length)
+    ) {
+      clearGhost();
+    }
   }
 
   function resolveTarget(): {
@@ -461,9 +551,18 @@ export default function Writing() {
                 className="min-w-0 flex-1 bg-transparent text-2xl font-semibold tracking-tight placeholder:text-muted-foreground/50 focus:outline-none"
               />
               <Button
-                variant={showAI ? "default" : "outline"}
+                variant={ghostOn ? "default" : "outline"}
                 size="sm"
-                onClick={() => setShowAI((v) => !v)}
+                onClick={() => setGhostOn((v) => !v)}
+                title="Autocomplete — predicts your next words as grey text; press Tab to accept"
+              >
+                <Sparkles className="size-4" />
+                Autocomplete
+              </Button>
+              <Button
+                variant={rightPanel === "chat" ? "default" : "outline"}
+                size="sm"
+                onClick={() => togglePanel("chat")}
                 title="Writing assistant — talk through your draft"
               >
                 <Bot className="size-4" />
@@ -545,16 +644,33 @@ export default function Writing() {
             </div>
 
             <div className="flex-1 overflow-y-auto">
-              <textarea
-                ref={bodyRef}
-                value={body}
-                onChange={(e) => setBody(e.target.value)}
-                onSelect={trackSelection}
-                onKeyUp={trackSelection}
-                onMouseUp={trackSelection}
-                placeholder="Start writing…"
-                className="mx-auto block h-full w-full max-w-3xl resize-none bg-transparent px-8 py-6 text-[15px] leading-7 placeholder:text-muted-foreground/50 focus:outline-none"
-              />
+              <div className="relative mx-auto min-h-full w-full max-w-3xl">
+                {/* Ghost-text mirror: same metrics as the textarea, renders the
+                    body invisibly so the grey suggestion lands after the caret. */}
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 whitespace-pre-wrap break-words px-8 py-6 text-[15px] leading-7 text-transparent"
+                >
+                  {body}
+                  {ghost && (
+                    <span className="text-muted-foreground/50">{ghost}</span>
+                  )}
+                </div>
+                <textarea
+                  ref={bodyRef}
+                  value={body}
+                  onChange={(e) => {
+                    setBody(e.target.value);
+                    if (ghost) setGhost("");
+                  }}
+                  onSelect={trackSelection}
+                  onKeyUp={trackSelection}
+                  onMouseUp={trackSelection}
+                  onKeyDown={onEditorKeyDown}
+                  placeholder="Start writing…"
+                  className="relative block min-h-full w-full resize-none bg-transparent px-8 py-6 text-[15px] leading-7 [field-sizing:content] placeholder:text-muted-foreground/50 focus:outline-none"
+                />
+              </div>
             </div>
 
             {assist && (
@@ -607,7 +723,15 @@ export default function Writing() {
             )}
 
             <div className="flex items-center justify-between border-t border-border px-8 py-2 text-xs text-muted-foreground">
-              <span>{words === 1 ? "1 word" : `${words} words`}</span>
+              <div className="flex items-center gap-3">
+                <span>{words === 1 ? "1 word" : `${words} words`}</span>
+                {ghostOn && (
+                  <span className="flex items-center gap-1 text-primary/80">
+                    <Sparkles className="size-3" />
+                    Autocomplete on · press Tab to accept
+                  </span>
+                )}
+              </div>
               <span>
                 {savedAt
                   ? `Saved ${new Date(savedAt).toLocaleTimeString(undefined, {
@@ -634,7 +758,7 @@ export default function Writing() {
         )}
       </div>
 
-      {showAI && (
+      {rightPanel === "chat" && (
         <TabAssistant
           title="Writing assistant"
           subtitle={
@@ -651,9 +775,10 @@ export default function Writing() {
             "Help me brainstorm where this goes next.",
             "Suggest three stronger opening lines.",
           ]}
-          onClose={() => setShowAI(false)}
+          onClose={() => setRightPanel("none")}
         />
       )}
+
     </div>
   );
 }
