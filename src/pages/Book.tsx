@@ -10,6 +10,7 @@ import {
   X,
   Square,
   CheckCircle2,
+  Download,
 } from "lucide-react";
 import {
   type Manuscript,
@@ -20,6 +21,11 @@ import {
   extractPdf,
 } from "@/lib/manuscript";
 import { proofreadText } from "@/lib/proofread";
+import {
+  TRIM_SIZES,
+  exportDocx,
+  downloadBlob,
+} from "@/lib/kindleExport";
 import { ping } from "@/lib/ollama";
 import { Button } from "@/components/ui/button";
 
@@ -43,6 +49,8 @@ export default function Book() {
   const [applied, setApplied] = useState<Set<number>>(new Set());
   const [allRunning, setAllRunning] = useState(false);
   const [allIdx, setAllIdx] = useState(0);
+  const [trimId, setTrimId] = useState("6x9");
+  const [exporting, setExporting] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const stopAllRef = useRef(false);
@@ -226,6 +234,28 @@ export default function Book() {
     setProof({});
   }
 
+  async function exportForKindle() {
+    if (!manuscript) return;
+    setExporting(true);
+    setError(null);
+    try {
+      const trim = TRIM_SIZES.find((t) => t.id === trimId) ?? TRIM_SIZES[0];
+      const blob = await exportDocx({
+        title: manuscript.title,
+        pages: manuscript.pages,
+        trim,
+      });
+      const safe =
+        (manuscript.title.trim() || "book").replace(/[^\p{L}\p{N} _-]/gu, "").trim() ||
+        "book";
+      downloadBlob(blob, `${safe}.docx`);
+    } catch (e) {
+      setError((e as Error).message || "Couldn't create the export.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const totalWords = manuscript
     ? manuscript.pages.reduce((n, p) => n + countWords(p), 0)
     : 0;
@@ -348,95 +378,131 @@ export default function Book() {
             />
           </div>
 
+          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
+            <Download className="size-4 shrink-0 text-primary" />
+            <span className="text-sm font-medium">Export for Kindle</span>
+            <span className="text-xs text-muted-foreground">
+              reflowable .docx for Amazon KDP · trim
+            </span>
+            <select
+              value={trimId}
+              onChange={(e) => setTrimId(e.target.value)}
+              className="h-8 rounded-md border border-border bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {TRIM_SIZES.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              onClick={exportForKindle}
+              disabled={exporting}
+              className="ml-auto"
+            >
+              <Download className="size-4" />
+              {exporting ? "Exporting…" : "Export .docx"}
+            </Button>
+          </div>
+
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
             {manuscript.pages.map((p, i) => {
               const pr = proof[i];
-              return (
-                <div key={i} className="rounded-lg border border-border p-4">
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-xs font-medium text-muted-foreground">
-                      Page {i + 1}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      {applied.has(i) && (
-                        <span className="flex items-center gap-1 text-xs text-green-600">
-                          <CheckCircle2 className="size-3.5" />
-                          Proofread
-                        </span>
-                      )}
-                      {!pr && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => proofreadOne(i)}
-                          disabled={proofDisabled}
-                        >
-                          <Sparkles className="size-4" />
-                          Proofread
-                        </Button>
-                      )}
+              const header = (
+                <div className="mb-1 flex items-center justify-between px-1">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Page {i + 1}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {applied.has(i) && (
+                      <span className="flex items-center gap-1 text-xs text-green-600">
+                        <CheckCircle2 className="size-3.5" />
+                        Proofread
+                      </span>
+                    )}
+                    {!pr && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => proofreadOne(i)}
+                        disabled={proofDisabled}
+                      >
+                        <Sparkles className="size-4" />
+                        Proofread
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+
+              if (pr) {
+                return (
+                  <div key={i} className="rounded-lg border border-border p-4">
+                    {header}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <div className="mb-1 text-xs font-medium text-muted-foreground">
+                          Original
+                        </div>
+                        <div className="whitespace-pre-wrap text-[15px] leading-7 text-muted-foreground">
+                          {p}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="mb-1 flex items-center gap-1 text-xs font-medium text-primary">
+                          <Sparkles className="size-3.5" />
+                          Suggested
+                        </div>
+                        <div className="whitespace-pre-wrap text-[15px] leading-7">
+                          {pr.status === "error" ? (
+                            <span className="text-red-600">
+                              Couldn't proofread. Is Ollama running?
+                            </span>
+                          ) : pr.suggestion ? (
+                            pr.suggestion
+                          ) : (
+                            <span className="text-muted-foreground">
+                              Proofreading…
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-end gap-2">
+                      <Button variant="ghost" size="sm" onClick={() => dismissProof(i)}>
+                        <X className="size-4" />
+                        Dismiss
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => applyProof(i)}
+                        disabled={pr.status !== "review" || !pr.suggestion.trim()}
+                      >
+                        <Check className="size-4" />
+                        Apply
+                      </Button>
                     </div>
                   </div>
+                );
+              }
 
-                  {pr ? (
-                    <>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <div className="mb-1 text-xs font-medium text-muted-foreground">
-                            Original
-                          </div>
-                          <div className="whitespace-pre-wrap text-[15px] leading-7 text-muted-foreground">
-                            {p}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="mb-1 flex items-center gap-1 text-xs font-medium text-primary">
-                            <Sparkles className="size-3.5" />
-                            Suggested
-                          </div>
-                          <div className="whitespace-pre-wrap text-[15px] leading-7">
-                            {pr.status === "error" ? (
-                              <span className="text-red-600">
-                                Couldn't proofread. Is Ollama running?
-                              </span>
-                            ) : pr.suggestion ? (
-                              pr.suggestion
-                            ) : (
-                              <span className="text-muted-foreground">
-                                Proofreading…
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="mt-3 flex items-center justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => dismissProof(i)}
-                        >
-                          <X className="size-4" />
-                          Dismiss
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={() => applyProof(i)}
-                          disabled={pr.status !== "review" || !pr.suggestion.trim()}
-                        >
-                          <Check className="size-4" />
-                          Apply
-                        </Button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="whitespace-pre-wrap text-[15px] leading-7">
+              // Reading view: an A4 sheet so pages read like real book pages.
+              return (
+                <div key={i} className="mx-auto w-full max-w-[794px]">
+                  {header}
+                  <div
+                    className="rounded-sm bg-white px-16 py-14 text-zinc-900 shadow-sm ring-1 ring-black/5"
+                    style={{ minHeight: 1123 }}
+                  >
+                    <div className="whitespace-pre-wrap font-serif text-[15px] leading-7">
                       {p || (
-                        <span className="italic text-muted-foreground">
+                        <span className="italic text-zinc-400">
                           (no text on this page)
                         </span>
                       )}
                     </div>
-                  )}
+                  </div>
                 </div>
               );
             })}
