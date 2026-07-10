@@ -20,7 +20,9 @@ import { type AssistantMessage, chat, ping } from "@/lib/ollama";
 import { TOOLS, executeTool } from "@/lib/assistantTools";
 import { getSettings } from "@/lib/settings";
 import { listTasks } from "@/lib/tasks";
-import { listProjects } from "@/lib/projects";
+import { listProjects, statusMeta } from "@/lib/projects";
+import { listSeminars } from "@/lib/seminars";
+import { listSkills } from "@/lib/skills";
 import { listMemories, memoryContext } from "@/lib/coachMemory";
 import {
   type ConversationSummary,
@@ -45,9 +47,11 @@ interface UiMessage {
 
 async function buildSystemPrompt(): Promise<string> {
   const s = getSettings();
-  const [tasks, projects, memories] = await Promise.all([
+  const [tasks, projects, seminars, skills, memories] = await Promise.all([
     listTasks(),
     listProjects(),
+    listSeminars(),
+    listSkills(),
     listMemories(),
   ]);
   const today = todayISO();
@@ -72,28 +76,58 @@ async function buildSystemPrompt(): Promise<string> {
   const dateRefLine = `Date reference for resolving days:\n${dateRef.join("\n")}`;
 
   const toolsLine =
-    "You can manage the app for the user with tools: add tasks/reminders, add projects, add seminar ideas, complete or remove tasks, and remember durable facts about them. Call a tool whenever they ask to add, schedule, complete, remove, or note something. Resolve relative dates (like 'tomorrow') to absolute YYYY-MM-DD. After acting, confirm briefly and naturally. When the user is only asking a question or recalling something (e.g. \"what was my … idea?\"), just answer in prose from what you know — do NOT call the remember tool unless they are giving you genuinely new information.";
+    "You are this app's control center — you can organize everything in it for the user with tools: add tasks/reminders, update or reschedule tasks, complete or remove tasks, add projects, update a project's status or due date, capture seminar ideas, run one of the user's saved Skills on some text, and remember durable facts about them. Call a tool whenever they ask to add, schedule, change, complete, remove, note, or run something. Resolve relative dates (like 'tomorrow') to absolute YYYY-MM-DD. After acting, confirm briefly and naturally. When the user is only asking a question or recalling something (e.g. \"what was my … idea?\"), just answer in prose from what you know — do NOT call the remember tool unless they are giving you genuinely new information.";
 
   const workLines: string[] = [];
   if (s.useContext) {
-    const todays = tasks.filter((t) => t.date === today && !t.done);
-    const active = projects.filter((p) => p.status === "active");
+    const open = tasks.filter((t) => !t.done);
+    const todays = open.filter((t) => t.date === today);
+    const overdue = open.filter((t) => t.date && t.date < today);
+    const upcoming = open
+      .filter((t) => t.date && t.date > today)
+      .sort((a, b) => (a.date! < b.date! ? -1 : 1))
+      .slice(0, 6);
+    const taskLine = (t: (typeof tasks)[number]) =>
+      `- ${t.time ? formatTimeLabel(t.time) + " " : ""}${t.title}`;
+
+    if (overdue.length) {
+      workLines.push("Overdue (not done):");
+      for (const t of overdue) workLines.push(`${taskLine(t)} — was ${t.date}`);
+    }
     if (todays.length) {
       workLines.push("Today's tasks:");
-      for (const t of todays)
-        workLines.push(
-          `- ${t.time ? formatTimeLabel(t.time) + " " : ""}${t.title}`,
-        );
+      for (const t of todays) workLines.push(taskLine(t));
     }
-    if (active.length)
-      workLines.push(`Active projects: ${active.map((p) => p.name).join(", ")}`);
+    if (upcoming.length) {
+      workLines.push("Upcoming tasks:");
+      for (const t of upcoming) workLines.push(`${taskLine(t)} — ${t.date}`);
+    }
+    if (projects.length) {
+      workLines.push("Projects:");
+      for (const p of projects)
+        workLines.push(`- ${p.name} (${statusMeta[p.status].label})`);
+    }
+    const inProgress = seminars.filter(
+      (s) => s.status === "developing" || s.status === "ready",
+    );
+    if (inProgress.length)
+      workLines.push(
+        `Seminars in progress: ${inProgress.map((s) => s.title).join(", ")}`,
+      );
   }
+
+  const skillsLine = skills.length
+    ? `The user's saved Skills you can run with run_skill: ${skills
+        .map((sk) => sk.name)
+        .join(", ")}.`
+    : "";
 
   return [
     s.persona,
     dateLine,
     dateRefLine,
     toolsLine,
+    skillsLine,
     memoryContext(memories),
     workLines.length ? `The user's current work:\n${workLines.join("\n")}` : "",
   ]
@@ -187,6 +221,7 @@ export default function Assistant() {
       { role: "user", content: text },
     ];
     const actions: string[] = [];
+    const generated: string[] = [];
     let finalContent = "";
 
     try {
@@ -205,11 +240,15 @@ export default function Assistant() {
           const parsed =
             typeof rawArgs === "string" ? safeParse(rawArgs) : (rawArgs ?? {});
           const result = await executeTool(tc.function.name, parsed);
-          actions.push(result);
+          actions.push(result.summary);
+          // Some tools (e.g. run_skill) generate text to show in the reply body.
+          if (result.content) generated.push(result.content);
         }
       }
 
       finalContent = msg.content ?? "";
+      if (generated.length)
+        finalContent = [finalContent, ...generated].filter(Boolean).join("\n\n");
       if (!finalContent && actions.length) finalContent = "Done.";
 
       setMessages((m) => {
