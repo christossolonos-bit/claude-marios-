@@ -16,6 +16,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   type Skill,
+  type SkillKind,
   listSkills,
   createSkill,
   updateSkill,
@@ -23,6 +24,7 @@ import {
   buildSkillMessages,
   skillNeedsInput,
 } from "@/lib/skills";
+import { runCapability, getCapability } from "@/lib/skillCapabilities";
 import { streamChat } from "@/lib/ollama";
 import { getSettings } from "@/lib/settings";
 import {
@@ -37,12 +39,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
-type Draft = Pick<Skill, "emoji" | "name" | "description" | "system" | "template">;
+type Draft = Pick<Skill, "emoji" | "name" | "description" | "system" | "template"> & {
+  kind: SkillKind;
+  capability?: string;
+};
 
 const EMPTY_DRAFT: Draft = {
   emoji: "✨",
   name: "",
   description: "",
+  kind: "prompt",
   system: "",
   template: "{{input}}",
 };
@@ -84,6 +90,15 @@ export default function Skills() {
     setError(null);
     setCopied(false);
     setOutput("");
+    // Function skills run a safe built-in instantly — no model call.
+    if (selected.kind === "function") {
+      try {
+        setOutput(runCapability(selected.capability ?? "", input));
+      } catch (e) {
+        setError((e as Error).message || String(e));
+      }
+      return;
+    }
     setRunning(true);
     const { system, user } = buildSkillMessages(selected, input);
     const ac = new AbortController();
@@ -130,6 +145,8 @@ export default function Skills() {
       emoji: skill.emoji,
       name: skill.name,
       description: skill.description,
+      kind: skill.kind,
+      capability: skill.capability,
       system: skill.system,
       template: skill.template,
     });
@@ -137,18 +154,32 @@ export default function Skills() {
   }
 
   async function saveDraft() {
-    const clean: Draft = {
-      emoji: draft.emoji.trim() || "✨",
-      name: draft.name.trim(),
+    const name = draft.name.trim();
+    if (!name) return;
+    if (draft.kind === "prompt" && !draft.system.trim()) return;
+    const patch: Partial<
+      Pick<Skill, "emoji" | "name" | "description" | "system" | "template">
+    > = {
+      emoji: draft.emoji.trim() || (draft.kind === "function" ? "🧩" : "✨"),
+      name,
       description: draft.description.trim(),
-      system: draft.system.trim(),
-      template: draft.template.trim() || "{{input}}",
     };
-    if (!clean.name || !clean.system) return;
+    // Only prompt skills have editable instructions/template.
+    if (draft.kind === "prompt") {
+      patch.system = draft.system.trim();
+      patch.template = draft.template.trim() || "{{input}}";
+    }
     if (editingId) {
-      await updateSkill(editingId, clean);
+      await updateSkill(editingId, patch);
     } else {
-      await createSkill(clean);
+      // Creating from the editor always makes a prompt skill.
+      await createSkill({
+        emoji: patch.emoji!,
+        name,
+        description: patch.description!,
+        system: patch.system ?? "",
+        template: patch.template ?? "{{input}}",
+      });
     }
     setEditorOpen(false);
     const fresh = await listSkills();
@@ -166,7 +197,8 @@ export default function Skills() {
     refresh();
   }
 
-  const canSave = draft.name.trim() && draft.system.trim();
+  const canSave =
+    draft.name.trim() && (draft.kind === "function" || draft.system.trim());
 
   return (
     <div className="mx-auto max-w-4xl p-8">
@@ -282,7 +314,14 @@ export default function Skills() {
             <CardContent className="flex items-start gap-3 pt-5 pr-16">
               <span className="text-2xl leading-none">{s.emoji}</span>
               <div className="min-w-0 flex-1">
-                <div className="font-medium">{s.name}</div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{s.name}</span>
+                  {s.kind === "function" && (
+                    <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-secondary-foreground">
+                      action
+                    </span>
+                  )}
+                </div>
                 <p className="mt-0.5 text-sm text-muted-foreground">
                   {s.description || "No description"}
                 </p>
@@ -363,37 +402,57 @@ export default function Skills() {
             />
           </div>
 
-          <div>
-            <label className="text-sm font-medium">
-              Instructions{" "}
-              <span className="font-normal text-muted-foreground">
-                (the AI's role)
-              </span>
-            </label>
-            <Textarea
-              value={draft.system}
-              onChange={(e) => setDraft({ ...draft, system: e.target.value })}
-              rows={3}
-              className="mt-1"
-              placeholder="You are a warm editor. Rewrite the text to sound warmer… Return only the result."
-            />
-          </div>
+          {draft.kind === "function" ? (
+            <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
+              <span className="font-medium">Built-in action:</span>{" "}
+              {getCapability(draft.capability ?? "")?.label ?? draft.capability}
+              <p className="mt-1 text-xs text-muted-foreground">
+                This skill runs a safe built-in action, so it has no prompt to
+                edit — just its name, icon, and description.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="text-sm font-medium">
+                  Instructions{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (the AI's role)
+                  </span>
+                </label>
+                <Textarea
+                  value={draft.system}
+                  onChange={(e) =>
+                    setDraft({ ...draft, system: e.target.value })
+                  }
+                  rows={3}
+                  className="mt-1"
+                  placeholder="You are a warm editor. Rewrite the text to sound warmer… Return only the result."
+                />
+              </div>
 
-          <div>
-            <label className="text-sm font-medium">Template</label>
-            <Textarea
-              value={draft.template}
-              onChange={(e) => setDraft({ ...draft, template: e.target.value })}
-              rows={2}
-              className="mt-1 font-mono text-xs"
-              placeholder="Rewrite this:\n\n{{input}}"
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              Use{" "}
-              <code className="rounded bg-muted px-1 py-0.5">{"{{input}}"}</code>{" "}
-              where your text goes. Leave it out for a skill that needs no input.
-            </p>
-          </div>
+              <div>
+                <label className="text-sm font-medium">Template</label>
+                <Textarea
+                  value={draft.template}
+                  onChange={(e) =>
+                    setDraft({ ...draft, template: e.target.value })
+                  }
+                  rows={2}
+                  className="mt-1 font-mono text-xs"
+                  placeholder="Rewrite this:\n\n{{input}}"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Use{" "}
+                  <code className="rounded bg-muted px-1 py-0.5">
+                    {"{{input}}"}
+                  </code>{" "}
+                  where your text goes. Leave it out for a skill that needs no
+                  input.
+                </p>
+              </div>
+            </>
+          )}
 
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => setEditorOpen(false)}>

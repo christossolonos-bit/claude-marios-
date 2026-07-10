@@ -15,16 +15,18 @@ import {
   MessageSquare,
   Mic,
   Loader2,
+  Wand2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { type AssistantMessage, chat, ping } from "@/lib/ollama";
-import { TOOLS, executeTool } from "@/lib/assistantTools";
+import { TOOLS, executeTool, type ProposedSkill } from "@/lib/assistantTools";
 import { getSettings } from "@/lib/settings";
 import { listTasks } from "@/lib/tasks";
 import { listProjects, statusMeta } from "@/lib/projects";
 import { listSeminars } from "@/lib/seminars";
-import { listSkills } from "@/lib/skills";
+import { listSkills, createSkill } from "@/lib/skills";
+import { capabilityCatalog } from "@/lib/skillCapabilities";
 import { listMemories, memoryContext } from "@/lib/coachMemory";
 import {
   type ConversationSummary,
@@ -80,7 +82,7 @@ async function buildSystemPrompt(): Promise<string> {
   const dateRefLine = `Date reference for resolving days:\n${dateRef.join("\n")}`;
 
   const toolsLine =
-    "You are this app's control center — you can organize everything in it for the user with tools: add tasks/reminders, update or reschedule tasks, complete or remove tasks, add projects, update a project's status or due date, capture seminar ideas, run one of the user's saved Skills on some text, and remember durable facts about them. Call a tool whenever they ask to add, schedule, change, complete, remove, note, or run something. Resolve relative dates (like 'tomorrow') to absolute YYYY-MM-DD. After acting, confirm briefly and naturally. When the user is only asking a question or recalling something (e.g. \"what was my … idea?\"), just answer in prose from what you know — do NOT call the remember tool unless they are giving you genuinely new information.";
+    "You are this app's control center — you can organize everything in it for the user with tools: add tasks/reminders, update or reschedule tasks, complete or remove tasks, add projects, update a project's status or due date, capture seminar ideas, run one of the user's saved Skills on some text, create a brand-new Skill when they describe a text task they'll want to repeat, and remember durable facts about them. Call a tool whenever they ask to add, schedule, change, complete, remove, note, run, or build something. When they describe a repeatable way they want text handled (e.g. \"I often need to turn my notes into a LinkedIn post\" or \"make a skill that fixes my Greek grammar\"), create a Skill for it. Resolve relative dates (like 'tomorrow') to absolute YYYY-MM-DD. After acting, confirm briefly and naturally. When the user is only asking a question or recalling something (e.g. \"what was my … idea?\"), just answer in prose from what you know — do NOT call the remember tool unless they are giving you genuinely new information.";
 
   const workLines: string[] = [];
   if (s.useContext) {
@@ -126,12 +128,15 @@ async function buildSystemPrompt(): Promise<string> {
         .join(", ")}.`
     : "";
 
+  const capabilitiesLine = `Built-in capability ids for create_skill action skills:\n${capabilityCatalog()}`;
+
   return [
     s.persona,
     dateLine,
     dateRefLine,
     toolsLine,
     skillsLine,
+    capabilitiesLine,
     memoryContext(memories),
     workLines.length ? `The user's current work:\n${workLines.join("\n")}` : "",
   ]
@@ -151,6 +156,7 @@ export default function Assistant() {
   const [showHistory, setShowHistory] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [pendingSkills, setPendingSkills] = useState<ProposedSkill[]>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const recorderRef = useRef<AudioRecorder | null>(null);
   const model = getSettings().model;
@@ -230,6 +236,7 @@ export default function Assistant() {
     ];
     const actions: string[] = [];
     const generated: string[] = [];
+    const proposed: ProposedSkill[] = [];
     let finalContent = "";
 
     try {
@@ -248,16 +255,22 @@ export default function Assistant() {
           const parsed =
             typeof rawArgs === "string" ? safeParse(rawArgs) : (rawArgs ?? {});
           const result = await executeTool(tc.function.name, parsed);
-          actions.push(result.summary);
+          if (result.summary) actions.push(result.summary);
           // Some tools (e.g. run_skill) generate text to show in the reply body.
           if (result.content) generated.push(result.content);
+          // create_skill proposes a skill that needs the user's approval.
+          if (result.pendingSkill) proposed.push(result.pendingSkill);
         }
       }
 
       finalContent = msg.content ?? "";
       if (generated.length)
         finalContent = [finalContent, ...generated].filter(Boolean).join("\n\n");
+      if (!finalContent && proposed.length)
+        finalContent =
+          "I've prepared a new skill for you — approve it below to install it.";
       if (!finalContent && actions.length) finalContent = "Done.";
+      if (proposed.length) setPendingSkills((p) => [...p, ...proposed]);
 
       setMessages((m) => {
         const copy = m.slice();
@@ -310,6 +323,7 @@ export default function Assistant() {
     setConvoId(null);
     setError(null);
     setShowHistory(false);
+    setPendingSkills([]);
   }
 
   function toggleVoice() {
@@ -355,6 +369,27 @@ export default function Assistant() {
       recorderRef.current = null;
       setTranscribing(false);
     }
+  }
+
+  // Install a skill the assistant proposed, after the user approves it.
+  async function installSkill(index: number) {
+    const ps = pendingSkills[index];
+    if (!ps) return;
+    await createSkill(ps);
+    setPendingSkills((p) => p.filter((_, i) => i !== index));
+    setMessages((m) => [
+      ...m,
+      {
+        role: "assistant",
+        content: "",
+        actions: [`Installed skill: ${ps.emoji} ${ps.name}`],
+        ts: Date.now(),
+      },
+    ]);
+  }
+
+  function dismissSkill(index: number) {
+    setPendingSkills((p) => p.filter((_, i) => i !== index));
   }
 
   return (
@@ -534,6 +569,48 @@ export default function Assistant() {
                   …
                 </div>
               )}
+          </div>
+        ))}
+        {pendingSkills.map((ps, i) => (
+          <div
+            key={`pending-${i}`}
+            className="rounded-xl border border-primary/40 bg-primary/5 p-4"
+          >
+            <div className="flex items-center gap-2">
+              <Wand2 className="size-4 text-primary" />
+              <span className="text-sm font-medium text-muted-foreground">
+                New skill to install
+              </span>
+              <span className="ml-auto rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
+                {ps.kind === "function" ? "action" : "prompt"}
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-base font-semibold">
+              <span className="text-lg">{ps.emoji}</span>
+              {ps.name}
+            </div>
+            {ps.description && (
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                {ps.description}
+              </p>
+            )}
+            <p className="mt-2 text-xs text-muted-foreground">
+              Install this skill so you and the assistant can use it? It's saved
+              locally and you can edit or remove it anytime in Skills.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <Button size="sm" onClick={() => installSkill(i)}>
+                <Check className="size-4" />
+                Install
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => dismissSkill(i)}
+              >
+                Dismiss
+              </Button>
+            </div>
           </div>
         ))}
         {error && (

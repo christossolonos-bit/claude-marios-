@@ -5,13 +5,22 @@
 // slot — stored locally in the app. Nothing executes code and nothing leaves
 // the folder; the dad can grow the app's abilities by writing plain prompts.
 
+import { getCapability } from "@/lib/skillCapabilities";
+
+// A skill is either a "prompt" (text → model → text) or a "function" bound to a
+// safe built-in capability (see skillCapabilities.ts) that actually does
+// something like telling the time.
+export type SkillKind = "prompt" | "function";
+
 export interface Skill {
   id: string;
   emoji: string;
   name: string;
   description: string;
-  system: string; // the role / instructions given to the model
-  template: string; // user-message template; {{input}} is replaced with the input
+  kind: SkillKind;
+  system: string; // prompt kind: the role / instructions given to the model
+  template: string; // prompt kind: {{input}} is replaced with the input
+  capability?: string; // function kind: the capability id it runs
   createdAt: number;
   updatedAt: number;
 }
@@ -21,7 +30,7 @@ const SEEDED_KEY = "authorhub.skills.seeded.v1";
 
 // Starter skills tailored to a writer / life coach. Seeded once on first use,
 // then fully owned by the user — editable and deletable like any other.
-const SEEDS: Array<Omit<Skill, "id" | "createdAt" | "updatedAt">> = [
+const SEEDS: Array<Omit<Skill, "id" | "createdAt" | "updatedAt" | "kind">> = [
   {
     emoji: "✨",
     name: "Rewrite clearer",
@@ -67,7 +76,15 @@ const SEEDS: Array<Omit<Skill, "id" | "createdAt" | "updatedAt">> = [
 function read(): Skill[] {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as Skill[]) : [];
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as Array<Partial<Skill>>;
+    // Backfill `kind` for skills saved before capability skills existed.
+    return arr.map((s) => ({
+      system: "",
+      template: "{{input}}",
+      kind: "prompt" as SkillKind,
+      ...s,
+    })) as Skill[];
   } catch {
     return [];
   }
@@ -85,6 +102,7 @@ function ensureSeeded(): Skill[] {
   const now = Date.now();
   const seeded = SEEDS.map((s, i) => ({
     ...s,
+    kind: "prompt" as SkillKind,
     id: crypto.randomUUID(),
     createdAt: now + i,
     updatedAt: now + i,
@@ -103,11 +121,31 @@ export async function getSkill(id: string): Promise<Skill | undefined> {
   return read().find((s) => s.id === id);
 }
 
-export async function createSkill(
-  data: Pick<Skill, "emoji" | "name" | "description" | "system" | "template">,
-): Promise<Skill> {
+export interface NewSkill {
+  emoji: string;
+  name: string;
+  description: string;
+  system?: string;
+  template?: string;
+  kind?: SkillKind;
+  capability?: string;
+}
+
+export async function createSkill(data: NewSkill): Promise<Skill> {
   const now = Date.now();
-  const skill: Skill = { ...data, id: crypto.randomUUID(), createdAt: now, updatedAt: now };
+  const kind: SkillKind = data.kind ?? (data.capability ? "function" : "prompt");
+  const skill: Skill = {
+    emoji: data.emoji,
+    name: data.name,
+    description: data.description,
+    kind,
+    system: data.system ?? "",
+    template: data.template ?? "{{input}}",
+    capability: kind === "function" ? data.capability : undefined,
+    id: crypto.randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+  };
   const items = ensureSeeded();
   items.push(skill);
   write(items);
@@ -148,5 +186,8 @@ export function buildSkillMessages(
 
 // Whether the skill actually expects the user to type something.
 export function skillNeedsInput(skill: Skill): boolean {
+  if (skill.kind === "function") {
+    return getCapability(skill.capability ?? "")?.needsInput ?? false;
+  }
   return skill.template.includes("{{input}}");
 }
