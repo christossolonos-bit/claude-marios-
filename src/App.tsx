@@ -8,6 +8,7 @@ import Writing from "@/pages/Writing";
 import Translate from "@/pages/Translate";
 import Book from "@/pages/Book";
 import Assistant from "@/pages/Assistant";
+import Skills from "@/pages/Skills";
 import Sales from "@/pages/Sales";
 import Marketing from "@/pages/Marketing";
 import MediaKit from "@/pages/MediaKit";
@@ -25,6 +26,7 @@ export default function App() {
         <Route path="translate" element={<Translate />} />
         <Route path="book" element={<Book />} />
         <Route path="assistant" element={<Assistant />} />
+        <Route path="skills" element={<Skills />} />
         <Route path="sales" element={<Sales />} />
         <Route path="marketing" element={<Marketing />} />
         <Route path="media-kit" element={<MediaKit />} />
