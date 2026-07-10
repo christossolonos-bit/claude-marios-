@@ -145,6 +145,36 @@ export default function Settings() {
 
         <Card>
           <CardHeader>
+            <CardTitle>Reminders</CardTitle>
+            <CardDescription>
+              How you're alerted when a task's time arrives (while the app is
+              open or minimized).
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.reminderSpeak}
+                onChange={(e) => update({ reminderSpeak: e.target.checked })}
+                className="mt-0.5"
+              />
+              Speak the reminder aloud (reads the task to you)
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.reminderSound}
+                onChange={(e) => update({ reminderSound: e.target.checked })}
+                className="mt-0.5"
+              />
+              Play an alarm chime
+            </label>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <CardTitle>Voice (Fish Audio)</CardTitle>
             <CardDescription>
               A higher-quality cloud voice. Note: when this is set, the reply

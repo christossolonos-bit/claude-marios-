@@ -2,6 +2,9 @@ import { useEffect, useRef } from "react";
 import { listTasks } from "@/lib/tasks";
 import { formatTimeLabel } from "@/lib/date";
 import { notify, ensureNotifyPermission } from "@/lib/notify";
+import { getSettings } from "@/lib/settings";
+import { speak } from "@/lib/tts";
+import { playChime } from "@/lib/chime";
 
 // Fires a desktop notification when a scheduled task's time arrives while the
 // app is running (open or minimized). To avoid spamming old/overdue tasks on
@@ -27,6 +30,13 @@ export function useReminders(): void {
         if (now >= due && due >= startedAt.current - 60_000) {
           fired.current.add(key);
           notify(t.title, `Reminder · ${formatTimeLabel(t.time)}`);
+          const s = getSettings();
+          // Chime first, then speak, so he hears an alert then what it's for.
+          if (s.reminderSound) playChime();
+          if (s.reminderSpeak) {
+            const when = t.time ? ` at ${formatTimeLabel(t.time)}` : "";
+            window.setTimeout(() => speak(`Reminder: ${t.title}${when}`), 700);
+          }
         }
       }
     }
