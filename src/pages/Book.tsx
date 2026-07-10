@@ -11,6 +11,8 @@ import {
   Square,
   CheckCircle2,
   Download,
+  Plus,
+  Wand2,
 } from "lucide-react";
 import {
   type Manuscript,
@@ -21,11 +23,7 @@ import {
   extractPdf,
 } from "@/lib/manuscript";
 import { proofreadText } from "@/lib/proofread";
-import {
-  TRIM_SIZES,
-  exportDocx,
-  downloadBlob,
-} from "@/lib/kindleExport";
+import { TRIM_SIZES, exportDocx, downloadBlob } from "@/lib/kindleExport";
 import { ping } from "@/lib/ollama";
 import { Button } from "@/components/ui/button";
 
@@ -49,16 +47,40 @@ export default function Book() {
   const [applied, setApplied] = useState<Set<number>>(new Set());
   const [allRunning, setAllRunning] = useState(false);
   const [allIdx, setAllIdx] = useState(0);
+  const [liveProof, setLiveProof] = useState(false);
   const [trimId, setTrimId] = useState("6x9");
   const [exporting, setExporting] = useState(false);
+
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const stopAllRef = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const manuscriptRef = useRef<Manuscript | null>(manuscript);
+
+  useEffect(() => {
+    manuscriptRef.current = manuscript;
+  }, [manuscript]);
 
   useEffect(() => {
     ping().then(setOnline);
-    return () => abortRef.current?.abort();
+    return () => {
+      abortRef.current?.abort();
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (liveTimer.current) clearTimeout(liveTimer.current);
+    };
   }, []);
+
+  function persist(m: Manuscript, immediate = false) {
+    setManuscript(m);
+    manuscriptRef.current = m;
+    if (immediate) {
+      saveManuscript(m);
+      return;
+    }
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => saveManuscript(m), 500);
+  }
 
   async function ingest(file: File) {
     if (!/\.pdf$/i.test(file.name)) {
@@ -72,14 +94,15 @@ export default function Book() {
       const pages = await extractPdf(file, (page, total) =>
         setProgress({ page, total }),
       );
-      const m: Manuscript = {
-        title: file.name.replace(/\.pdf$/i, ""),
-        pages,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-      saveManuscript(m);
-      setManuscript(m);
+      persist(
+        {
+          title: file.name.replace(/\.pdf$/i, ""),
+          pages,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+        true,
+      );
       setProof({});
       setApplied(new Set());
     } catch (e) {
@@ -103,10 +126,25 @@ export default function Book() {
     if (f) ingest(f);
   }
 
+  function startBlank() {
+    persist(
+      {
+        title: "Untitled",
+        pages: ["Chapter One\n\n"],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      true,
+    );
+    setProof({});
+    setApplied(new Set());
+  }
+
   function remove() {
     abortRef.current?.abort();
     clearManuscript();
     setManuscript(null);
+    manuscriptRef.current = null;
     setProof({});
     setApplied(new Set());
     setError(null);
@@ -114,9 +152,37 @@ export default function Book() {
 
   function updateTitle(title: string) {
     if (!manuscript) return;
-    const m = { ...manuscript, title, updatedAt: Date.now() };
-    saveManuscript(m);
-    setManuscript(m);
+    persist({ ...manuscript, title, updatedAt: Date.now() });
+  }
+
+  function updatePage(i: number, text: string) {
+    if (!manuscript) return;
+    const pages = manuscript.pages.slice();
+    pages[i] = text;
+    persist({ ...manuscript, pages, updatedAt: Date.now() });
+    if (liveProof && !allRunning) {
+      if (liveTimer.current) clearTimeout(liveTimer.current);
+      if (text.trim())
+        liveTimer.current = setTimeout(() => proofreadOne(i), 2200);
+    }
+  }
+
+  function addPage() {
+    if (!manuscript) return;
+    persist(
+      { ...manuscript, pages: [...manuscript.pages, ""], updatedAt: Date.now() },
+      true,
+    );
+  }
+
+  function deletePage(i: number) {
+    if (!manuscript) return;
+    const pages = manuscript.pages.slice();
+    pages.splice(i, 1);
+    persist({ ...manuscript, pages, updatedAt: Date.now() }, true);
+    // Indices shift, so clear per-page state.
+    setProof({});
+    setApplied(new Set());
   }
 
   const proofing = Object.values(proof).some((p) => p.status === "proofing");
@@ -125,13 +191,12 @@ export default function Book() {
     .map(Number)
     .filter((i) => proof[i].status === "review");
 
-  // Stream a proofread of one page; resolves with the corrected text.
-  async function runProof(i: number, signal: AbortSignal): Promise<string> {
+  async function runProof(i: number, text: string, signal: AbortSignal) {
     setProof((p) => ({ ...p, [i]: { status: "proofing", suggestion: "" } }));
     let acc = "";
     try {
       await proofreadText({
-        text: manuscript!.pages[i],
+        text,
         signal,
         onToken: (t) => {
           acc += t;
@@ -141,10 +206,11 @@ export default function Book() {
           }));
         },
       });
-      const final = acc.trim();
-      setProof((p) => ({ ...p, [i]: { status: "review", suggestion: final } }));
-      return final;
-    } catch (e) {
+      setProof((p) => ({
+        ...p,
+        [i]: { status: "review", suggestion: acc.trim() },
+      }));
+    } catch {
       if (signal.aborted) {
         setProof((p) => {
           const n = { ...p };
@@ -154,33 +220,32 @@ export default function Book() {
       } else {
         setProof((p) => ({ ...p, [i]: { status: "error", suggestion: "" } }));
       }
-      throw e;
     }
   }
 
   function proofreadOne(i: number) {
-    if (anyBusy) return;
+    const text = manuscriptRef.current?.pages[i] ?? "";
+    if (!text.trim() || online === false) return;
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
-    runProof(i, ac.signal).catch(() => {});
+    runProof(i, text, ac.signal);
   }
 
   async function proofreadAll() {
-    if (!manuscript || anyBusy) return;
+    const m = manuscriptRef.current;
+    if (!m || anyBusy) return;
+    abortRef.current?.abort();
     stopAllRef.current = false;
     const ac = new AbortController();
     abortRef.current = ac;
     setAllRunning(true);
-    for (let i = 0; i < manuscript.pages.length; i++) {
+    for (let i = 0; i < m.pages.length; i++) {
       if (stopAllRef.current || ac.signal.aborted) break;
       if (applied.has(i) || proof[i]?.status === "review") continue;
+      if (!m.pages[i].trim()) continue;
       setAllIdx(i);
-      try {
-        await runProof(i, ac.signal);
-      } catch {
-        if (ac.signal.aborted) break;
-      }
+      await runProof(i, m.pages[i], ac.signal);
     }
     setAllRunning(false);
   }
@@ -197,15 +262,9 @@ export default function Book() {
     if (!s) return;
     const pages = manuscript.pages.slice();
     pages[i] = s;
-    const m = { ...manuscript, pages, updatedAt: Date.now() };
-    saveManuscript(m);
-    setManuscript(m);
+    persist({ ...manuscript, pages, updatedAt: Date.now() }, true);
     setApplied((a) => new Set(a).add(i));
-    setProof((p) => {
-      const n = { ...p };
-      delete n[i];
-      return n;
-    });
+    dismissProof(i);
   }
 
   function dismissProof(i: number) {
@@ -214,6 +273,11 @@ export default function Book() {
       delete n[i];
       return n;
     });
+  }
+
+  function stopProof(i: number) {
+    abortRef.current?.abort();
+    dismissProof(i);
   }
 
   function applyAllReviews() {
@@ -227,9 +291,7 @@ export default function Book() {
         nowApplied.add(i);
       }
     }
-    const m = { ...manuscript, pages, updatedAt: Date.now() };
-    saveManuscript(m);
-    setManuscript(m);
+    persist({ ...manuscript, pages, updatedAt: Date.now() }, true);
     setApplied(nowApplied);
     setProof({});
   }
@@ -246,8 +308,9 @@ export default function Book() {
         trim,
       });
       const safe =
-        (manuscript.title.trim() || "book").replace(/[^\p{L}\p{N} _-]/gu, "").trim() ||
-        "book";
+        (manuscript.title.trim() || "book")
+          .replace(/[^\p{L}\p{N} _-]/gu, "")
+          .trim() || "book";
       downloadBlob(blob, `${safe}.docx`);
     } catch (e) {
       setError((e as Error).message || "Couldn't create the export.");
@@ -268,9 +331,9 @@ export default function Book() {
         <h1 className="text-2xl font-semibold tracking-tight">Book</h1>
       </div>
       <p className="mb-6 text-muted-foreground">
-        Upload your full book as a PDF. It's read on this machine — nothing is
-        uploaded. The assistant proofreads it page by page; next, a Kindle-ready
-        version.
+        Write or upload your book. Edit any chapter directly — turn on Live
+        proofread and the assistant checks it as you type. Everything stays on
+        this machine.
       </p>
 
       {error && (
@@ -304,15 +367,21 @@ export default function Book() {
         >
           <Upload className="mb-3 size-8 text-muted-foreground" />
           <p className="mb-1 text-sm font-medium">
-            Drop your book PDF here, or choose a file
+            Drop a book PDF here, or start writing from scratch
           </p>
           <p className="mb-4 text-xs text-muted-foreground">
-            The text is extracted locally so the assistant can work on it.
+            A PDF is read locally; or begin a blank book and type your chapters.
           </p>
-          <Button onClick={() => fileRef.current?.click()}>
-            <Upload className="size-4" />
-            Choose PDF
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button onClick={() => fileRef.current?.click()}>
+              <Upload className="size-4" />
+              Choose PDF
+            </Button>
+            <Button variant="outline" onClick={startBlank}>
+              <Plus className="size-4" />
+              Start a blank book
+            </Button>
+          </div>
           <input
             ref={fileRef}
             type="file"
@@ -323,20 +392,34 @@ export default function Book() {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="mb-4 flex flex-wrap items-center gap-3 border-b border-border pb-4">
+          <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-border pb-4">
             <input
               value={manuscript.title}
               onChange={(e) => updateTitle(e.target.value)}
-              className="min-w-0 flex-1 bg-transparent text-lg font-semibold tracking-tight focus:outline-none"
+              className="mr-auto min-w-0 flex-1 bg-transparent text-lg font-semibold tracking-tight focus:outline-none"
             />
             <span className="text-sm text-muted-foreground">
               {manuscript.pages.length} pages · {totalWords.toLocaleString()}{" "}
               words
             </span>
+            <Button
+              variant={liveProof ? "default" : "outline"}
+              size="sm"
+              onClick={() => setLiveProof((v) => !v)}
+              title={
+                online === false
+                  ? "Ollama offline"
+                  : "Proofread each chapter as you type"
+              }
+              disabled={online === false}
+            >
+              <Wand2 className="size-4" />
+              Live proofread{liveProof ? " · on" : ""}
+            </Button>
             {allRunning ? (
               <Button variant="outline" size="sm" onClick={stopAll}>
                 <Square className="size-3.5" />
-                Stop · page {allIdx + 1}/{manuscript.pages.length}
+                Stop · {allIdx + 1}/{manuscript.pages.length}
               </Button>
             ) : (
               <Button
@@ -344,7 +427,6 @@ export default function Book() {
                 size="sm"
                 onClick={proofreadAll}
                 disabled={proofDisabled}
-                title={online === false ? "Ollama offline" : "Proofread every page"}
               >
                 <Sparkles className="size-4" />
                 Proofread all
@@ -406,106 +488,114 @@ export default function Book() {
             </Button>
           </div>
 
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+          <div className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1">
             {manuscript.pages.map((p, i) => {
               const pr = proof[i];
-              const header = (
-                <div className="mb-1 flex items-center justify-between px-1">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    Page {i + 1}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    {applied.has(i) && (
-                      <span className="flex items-center gap-1 text-xs text-green-600">
-                        <CheckCircle2 className="size-3.5" />
-                        Proofread
-                      </span>
-                    )}
-                    {!pr && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => proofreadOne(i)}
-                        disabled={proofDisabled}
-                      >
-                        <Sparkles className="size-4" />
-                        Proofread
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              );
-
-              if (pr) {
-                return (
-                  <div key={i} className="rounded-lg border border-border p-4">
-                    {header}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <div className="mb-1 text-xs font-medium text-muted-foreground">
-                          Original
-                        </div>
-                        <div className="whitespace-pre-wrap text-[15px] leading-7 text-muted-foreground">
-                          {p}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="mb-1 flex items-center gap-1 text-xs font-medium text-primary">
-                          <Sparkles className="size-3.5" />
-                          Suggested
-                        </div>
-                        <div className="whitespace-pre-wrap text-[15px] leading-7">
-                          {pr.status === "error" ? (
-                            <span className="text-red-600">
-                              Couldn't proofread. Is Ollama running?
-                            </span>
-                          ) : pr.suggestion ? (
-                            pr.suggestion
-                          ) : (
-                            <span className="text-muted-foreground">
-                              Proofreading…
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="mt-3 flex items-center justify-end gap-2">
-                      <Button variant="ghost" size="sm" onClick={() => dismissProof(i)}>
-                        <X className="size-4" />
-                        Dismiss
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() => applyProof(i)}
-                        disabled={pr.status !== "review" || !pr.suggestion.trim()}
-                      >
-                        <Check className="size-4" />
-                        Apply
-                      </Button>
-                    </div>
-                  </div>
-                );
-              }
-
-              // Reading view: an A4 sheet so pages read like real book pages.
               return (
                 <div key={i} className="mx-auto w-full max-w-[794px]">
-                  {header}
-                  <div
-                    className="rounded-sm bg-white px-16 py-14 text-zinc-900 shadow-sm ring-1 ring-black/5"
-                    style={{ minHeight: 1123 }}
-                  >
-                    <div className="whitespace-pre-wrap font-serif text-[15px] leading-7">
-                      {p || (
-                        <span className="italic text-zinc-400">
-                          (no text on this page)
+                  <div className="mb-1 flex items-center justify-between px-1">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Page {i + 1}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {applied.has(i) && (
+                        <span className="flex items-center gap-1 text-xs text-green-600">
+                          <CheckCircle2 className="size-3.5" />
+                          Proofread
                         </span>
                       )}
+                      {!pr && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => proofreadOne(i)}
+                          disabled={proofDisabled}
+                        >
+                          <Sparkles className="size-4" />
+                          Proofread
+                        </Button>
+                      )}
+                      <button
+                        onClick={() => deletePage(i)}
+                        title="Delete this page"
+                        className="rounded p-1 text-muted-foreground hover:text-red-600"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
                     </div>
                   </div>
+
+                  <textarea
+                    value={p}
+                    onChange={(e) => updatePage(i, e.target.value)}
+                    placeholder="Write this chapter…"
+                    className="block min-h-[460px] w-full resize-none rounded-sm bg-white px-16 py-16 font-serif text-[15px] leading-7 text-zinc-900 shadow-sm ring-1 ring-black/5 [field-sizing:content] placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  />
+
+                  {pr && (
+                    <div className="mt-2 rounded-lg border border-border bg-card p-3">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="flex items-center gap-1 text-xs font-medium text-primary">
+                          <Sparkles className="size-3.5" />
+                          Suggested correction
+                          {pr.status === "proofing" && " · proofreading…"}
+                        </span>
+                        {pr.status === "proofing" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => stopProof(i)}
+                          >
+                            <Square className="size-3.5" />
+                            Stop
+                          </Button>
+                        )}
+                      </div>
+                      <div className="max-h-64 overflow-y-auto whitespace-pre-wrap text-[15px] leading-7">
+                        {pr.status === "error" ? (
+                          <span className="text-red-600">
+                            Couldn't proofread. Is Ollama running?
+                          </span>
+                        ) : pr.suggestion ? (
+                          pr.suggestion
+                        ) : (
+                          <span className="text-muted-foreground">
+                            Proofreading…
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-2 flex items-center justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => dismissProof(i)}
+                        >
+                          <X className="size-4" />
+                          Dismiss
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => applyProof(i)}
+                          disabled={
+                            pr.status !== "review" || !pr.suggestion.trim()
+                          }
+                        >
+                          <Check className="size-4" />
+                          Apply
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
+
+            <div className="mx-auto w-full max-w-[794px] pb-4">
+              <Button variant="outline" onClick={addPage} className="w-full">
+                <Plus className="size-4" />
+                Add page
+              </Button>
+            </div>
           </div>
         </div>
       )}
