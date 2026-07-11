@@ -15,7 +15,6 @@ import {
   X,
   Square,
   Flame,
-  Bot,
 } from "lucide-react";
 import {
   type DocSummary,
@@ -46,11 +45,9 @@ import {
 } from "@/lib/writingGoal";
 import { getSettings } from "@/lib/settings";
 import { predictContinuation } from "@/lib/autocomplete";
-import TabAssistant from "@/components/TabAssistant";
+import FloatingAssistant from "@/components/FloatingAssistant";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-
-type RightPanel = "none" | "chat";
 
 // System prompt for the docked Writing assistant — scoped to the open document
 // so it can discuss the actual draft. Talk-only: it advises, it doesn't edit
@@ -105,7 +102,6 @@ export default function Writing() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [assist, setAssist] = useState<Assist | null>(null);
   const [stats, setStats] = useState<WritingStats>(() => getStats());
-  const [rightPanel, setRightPanel] = useState<RightPanel>("none");
   const [ghostOn, setGhostOn] = useState(false);
   const [ghost, setGhost] = useState("");
 
@@ -244,10 +240,6 @@ export default function Writing() {
       e.preventDefault();
       clearGhost();
     }
-  }
-
-  function togglePanel(panel: "chat") {
-    setRightPanel((cur) => (cur === panel ? "none" : panel));
   }
 
   function trackSelection() {
@@ -559,15 +551,6 @@ export default function Writing() {
                 <Sparkles className="size-4" />
                 Autocomplete
               </Button>
-              <Button
-                variant={rightPanel === "chat" ? "default" : "outline"}
-                size="sm"
-                onClick={() => togglePanel("chat")}
-                title="Writing assistant — talk through your draft"
-              >
-                <Bot className="size-4" />
-                Assistant
-              </Button>
             </div>
 
             <div className="flex flex-wrap items-center gap-1 border-b border-border px-8 py-2">
@@ -758,24 +741,14 @@ export default function Writing() {
         )}
       </div>
 
-      {rightPanel === "chat" && (
-        <TabAssistant
+      {docId && (
+        <FloatingAssistant
           title="Writing assistant"
-          subtitle={
-            docId
-              ? "Talk through the document you have open."
-              : "Open a document to discuss it."
-          }
-          storageKey={docId ? `writing.${docId}` : "writing.none"}
+          subtitle="Talk through your draft"
+          emptyHint="Ask about your draft — brainstorm, get feedback, or talk through where it goes next."
+          storageKey={`writing.${docId}`}
           buildSystem={() => writingSystem(title, body)}
-          online={online}
           placeholder="Ask about this draft…"
-          starters={[
-            "What's working and what's weak here?",
-            "Help me brainstorm where this goes next.",
-            "Suggest three stronger opening lines.",
-          ]}
-          onClose={() => setRightPanel("none")}
         />
       )}
 
