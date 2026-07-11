@@ -46,6 +46,7 @@ import {
 import { getSettings } from "@/lib/settings";
 import { predictContinuation } from "@/lib/autocomplete";
 import FloatingAssistant from "@/components/FloatingAssistant";
+import MicButton from "@/components/MicButton";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -107,6 +108,7 @@ export default function Writing() {
   const [stats, setStats] = useState<WritingStats>(() => getStats());
   const [ghostOn, setGhostOn] = useState(false);
   const [ghost, setGhost] = useState("");
+  const [micError, setMicError] = useState<string | null>(null);
 
   const ghostTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ghostAbort = useRef<AbortController | null>(null);
@@ -415,6 +417,30 @@ export default function Writing() {
     setAssist((a) => (a ? { ...a, busy: false } : a));
   }
 
+  // Drop dictated (or any) text into the body at the caret, keeping a space
+  // between words, and place the caret after the inserted text.
+  function insertAtCursor(text: string) {
+    const clean = text.trim();
+    if (!clean) return;
+    setMicError(null);
+    const at = selRef.current.end || body.length;
+    const before = body.slice(0, at);
+    const after = body.slice(at);
+    const sep = before && !/\s$/.test(before) ? " " : "";
+    const chunk = sep + clean;
+    setBody(before + chunk + after);
+    if (ghost) setGhost("");
+    const caret = at + chunk.length;
+    requestAnimationFrame(() => {
+      const el = bodyRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(caret, caret);
+      }
+      selRef.current = { start: caret, end: caret };
+    });
+  }
+
   function acceptAssist() {
     if (!assist) return;
     const s = assist.suggestion.trim();
@@ -555,6 +581,12 @@ export default function Writing() {
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="Untitled"
                 className="min-w-0 flex-1 bg-transparent text-2xl font-semibold tracking-tight placeholder:text-muted-foreground/50 focus:outline-none"
+              />
+              <MicButton
+                onText={insertAtCursor}
+                onError={setMicError}
+                label="Dictate"
+                idleTitle="Dictate — speak and it's transcribed into your draft at the cursor"
               />
               <Button
                 variant={ghostOn ? "default" : "outline"}
@@ -728,6 +760,7 @@ export default function Writing() {
                     Autocomplete on · press Tab to accept
                   </span>
                 )}
+                {micError && <span className="text-red-600">{micError}</span>}
               </div>
               <span>
                 {savedAt

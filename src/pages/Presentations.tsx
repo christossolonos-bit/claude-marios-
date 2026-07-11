@@ -11,6 +11,7 @@ import {
   Square,
   Loader2,
   Check,
+  Image as ImageIcon,
 } from "lucide-react";
 import {
   type Deck,
@@ -27,6 +28,7 @@ import {
   parseOutline,
 } from "@/lib/decks";
 import { generateDeck } from "@/lib/deckAssist";
+import { fileToDataUrl } from "@/lib/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -100,6 +102,55 @@ function SlideView({ slide, full }: { slide: Slide; full: boolean }) {
           </ul>
         </div>
       )}
+
+      {slide.layout === "free" && (
+        <div className="flex h-full flex-col">
+          {slide.title && (
+            <h2
+              className={cn(
+                "font-bold",
+                full ? "mb-4 text-3xl" : "mb-1 truncate text-[10px]",
+              )}
+            >
+              {slide.title}
+            </h2>
+          )}
+          <div
+            className={cn(
+              "flex-1 overflow-hidden whitespace-pre-wrap",
+              full ? "text-xl leading-relaxed" : "text-[8px] leading-snug",
+            )}
+          >
+            {slide.body}
+          </div>
+        </div>
+      )}
+
+      {slide.layout === "image" && (
+        <div className="flex h-full w-full flex-col items-center justify-center">
+          {slide.image ? (
+            <img
+              src={slide.image}
+              alt={slide.title || "Slide image"}
+              className="min-h-0 max-h-full max-w-full object-contain"
+            />
+          ) : (
+            <div
+              className={cn(
+                "text-neutral-400",
+                full ? "text-sm" : "text-[8px]",
+              )}
+            >
+              No image yet
+            </div>
+          )}
+          {full && slide.title && (
+            <p className="mt-3 shrink-0 text-sm text-neutral-500">
+              {slide.title}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -109,6 +160,8 @@ export default function Presentations() {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [sel, setSel] = useState(0);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [imgError, setImgError] = useState<string | null>(null);
+  const imgInputRef = useRef<HTMLInputElement | null>(null);
 
   // Present mode
   const [present, setPresent] = useState(false);
@@ -175,6 +228,32 @@ export default function Presentations() {
       idx === i ? { ...s, ...patch } : s,
     );
     persist({ ...deck, slides });
+  }
+
+  // Set (or replace) a slide's image. Saves immediately rather than through the
+  // debounce so a storage-quota failure from a too-large image can be caught and
+  // surfaced instead of silently dropped in a later timer.
+  async function setSlideImage(i: number, file: File) {
+    if (!deck) return;
+    setImgError(null);
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const slides = deck.slides.map((s, idx) =>
+        idx === i ? { ...s, image: dataUrl, layout: "image" as SlideLayout } : s,
+      );
+      const next = { ...deck, slides };
+      await updateDeck(next.id, { title: next.title, slides });
+      setDeck(next);
+      setSavedAt(Date.now());
+      setDecks(await listDecks());
+    } catch (e) {
+      const quota = e instanceof Error && /quota|exceeded/i.test(e.message);
+      setImgError(
+        quota
+          ? "That image is too large to store. Try a smaller one."
+          : (e as Error).message || "Couldn't add that image.",
+      );
+    }
   }
 
   function addSlide() {
@@ -526,6 +605,65 @@ export default function Presentations() {
                           Add point
                         </Button>
                       </div>
+                    </div>
+                  )}
+
+                  {slide.layout === "free" && (
+                    <div>
+                      <label className="text-sm font-medium">Slide text</label>
+                      <Textarea
+                        value={slide.body}
+                        onChange={(e) =>
+                          patchSlide(sel, { body: e.target.value })
+                        }
+                        rows={8}
+                        className="mt-1 font-mono text-sm"
+                        placeholder="Write anything you want on this slide — line breaks and spacing are kept exactly as you type them."
+                      />
+                    </div>
+                  )}
+
+                  {slide.layout === "image" && (
+                    <div>
+                      <label className="text-sm font-medium">Image</label>
+                      <div className="mt-1 flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => imgInputRef.current?.click()}
+                        >
+                          <ImageIcon className="size-4" />
+                          {slide.image ? "Replace image" : "Choose image"}
+                        </Button>
+                        {slide.image && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => patchSlide(sel, { image: "" })}
+                          >
+                            <X className="size-4" />
+                            Remove
+                          </Button>
+                        )}
+                      </div>
+                      <input
+                        ref={imgInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) setSlideImage(sel, f);
+                          e.target.value = "";
+                        }}
+                      />
+                      {imgError && (
+                        <p className="mt-1 text-xs text-red-600">{imgError}</p>
+                      )}
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Stored on this device. The Title field above shows as a
+                        caption under the image.
+                      </p>
                     </div>
                   )}
 

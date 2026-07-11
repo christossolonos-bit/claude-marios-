@@ -3,7 +3,7 @@
 // SQLite plugin later without touching callers. AI generation (deckAssist) and
 // .pptx export are layered on top of this in later increments.
 
-export type SlideLayout = "title" | "bullets" | "section";
+export type SlideLayout = "title" | "bullets" | "section" | "free" | "image";
 
 export interface Slide {
   id: string;
@@ -11,6 +11,8 @@ export interface Slide {
   title: string;
   subtitle: string; // used by the "title" layout
   bullets: string[]; // used by the "bullets" layout
+  body: string; // free-form text, used by the "free" layout
+  image: string; // data-URL image, used by the "image" layout (title = caption)
   notes: string; // speaker notes (not shown on the slide)
 }
 
@@ -35,6 +37,8 @@ export const LAYOUT_LABEL: Record<SlideLayout, string> = {
   title: "Title",
   bullets: "Title & bullets",
   section: "Section header",
+  free: "Free text",
+  image: "Image",
 };
 
 export function newSlide(
@@ -47,6 +51,8 @@ export function newSlide(
     title: "",
     subtitle: "",
     bullets: [],
+    body: "",
+    image: "",
     notes: "",
     ...init,
   };
@@ -55,7 +61,18 @@ export function newSlide(
 function read(): Deck[] {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as Deck[]) : [];
+    if (!raw) return [];
+    const decks = JSON.parse(raw) as Deck[];
+    // Backfill fields added in later versions so decks saved before the free /
+    // image layouts existed still render cleanly.
+    return decks.map((d) => ({
+      ...d,
+      slides: d.slides.map((s) => ({
+        ...s,
+        body: s.body ?? "",
+        image: s.image ?? "",
+      })),
+    }));
   } catch {
     return [];
   }

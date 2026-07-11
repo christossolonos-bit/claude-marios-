@@ -27,6 +27,7 @@ import { proofreadText } from "@/lib/proofread";
 import { TRIM_SIZES, exportDocx, downloadBlob } from "@/lib/kindleExport";
 import { ping } from "@/lib/ollama";
 import { Button } from "@/components/ui/button";
+import MicButton from "@/components/MicButton";
 
 interface Proof {
   status: "proofing" | "review" | "error";
@@ -179,6 +180,17 @@ export default function Book() {
       if (text.trim())
         liveTimer.current = setTimeout(() => proofreadOne(i), 2200);
     }
+  }
+
+  // Append dictated speech into a chapter — for writing or extending a chapter
+  // by voice on a day the user doesn't want to type. Uses the live ref so
+  // back-to-back dictations don't clobber each other.
+  function dictateIntoPage(i: number, text: string) {
+    const m = manuscriptRef.current;
+    if (!m) return;
+    const cur = m.pages[i] ?? "";
+    const sep = cur && !/\s$/.test(cur) ? " " : "";
+    updatePage(i, cur + sep + text.trim());
   }
 
   function addPage() {
@@ -520,6 +532,12 @@ export default function Book() {
                           Proofread
                         </span>
                       )}
+                      <MicButton
+                        onText={(t) => dictateIntoPage(i, t)}
+                        onError={setError}
+                        label="Dictate"
+                        idleTitle="Dictate this chapter — speak instead of typing"
+                      />
                       {!pr && (
                         <Button
                           variant="ghost"
