@@ -60,6 +60,38 @@ function cleanPage(raw: string): string {
   return out.replace(/\n{3,}/g, "\n\n").replace(/[ \t]{2,}/g, " ").trim();
 }
 
+/**
+ * Extract text from a Word (.docx) file, split into pages at headings so each
+ * chapter becomes its own editable page. mammoth is imported lazily (and its
+ * unzip internals are browser-safe). The file never leaves the machine.
+ */
+export async function extractDocx(file: File): Promise<string[]> {
+  const mammoth = (await import("mammoth")).default;
+  const arrayBuffer = await file.arrayBuffer();
+  const { value: html } = await mammoth.convertToHtml({ arrayBuffer });
+  const doc = new DOMParser().parseFromString(html, "text/html");
+
+  const pages: string[] = [];
+  let current: string[] = [];
+  const flush = () => {
+    const text = current.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+    if (text) pages.push(text);
+    current = [];
+  };
+
+  for (const el of Array.from(doc.body.children)) {
+    const tag = el.tagName.toLowerCase();
+    const text = (el.textContent ?? "").replace(/[ \t]+/g, " ").trim();
+    if (!text) continue;
+    // Start a new page at each heading (chapter break).
+    if (/^h[1-4]$/.test(tag) && current.length) flush();
+    current.push(text);
+  }
+  flush();
+
+  return pages.length ? pages : [""];
+}
+
 interface PdfTextItem {
   str?: string;
   hasEOL?: boolean;

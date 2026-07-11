@@ -21,6 +21,7 @@ import {
   clearManuscript,
   countWords,
   extractPdf,
+  extractDocx,
 } from "@/lib/manuscript";
 import { proofreadText } from "@/lib/proofread";
 import { TRIM_SIZES, exportDocx, downloadBlob } from "@/lib/kindleExport";
@@ -82,22 +83,35 @@ export default function Book() {
     saveTimer.current = setTimeout(() => saveManuscript(m), 500);
   }
 
-  async function ingest(file: File) {
-    if (!/\.pdf$/i.test(file.name)) {
-      setError("Please choose a PDF file.");
+  // Read one or more book files (PDF or Word .docx) into a single manuscript.
+  // Multiple files are concatenated in order — handy when each chapter is its
+  // own Word file.
+  async function ingest(files: File[]) {
+    const valid = files.filter((f) => /\.(pdf|docx)$/i.test(f.name));
+    if (!valid.length) {
+      setError("Please choose a PDF or Word (.docx) file.");
       return;
     }
     setError(null);
     setBusy(true);
     setProgress({ page: 0, total: 0 });
     try {
-      const pages = await extractPdf(file, (page, total) =>
-        setProgress({ page, total }),
-      );
+      const allPages: string[] = [];
+      for (const file of valid) {
+        if (/\.pdf$/i.test(file.name)) {
+          const pages = await extractPdf(file, (page, total) =>
+            setProgress({ page, total }),
+          );
+          allPages.push(...pages);
+        } else {
+          const pages = await extractDocx(file);
+          allPages.push(...pages);
+        }
+      }
       persist(
         {
-          title: file.name.replace(/\.pdf$/i, ""),
-          pages,
+          title: valid[0].name.replace(/\.(pdf|docx)$/i, ""),
+          pages: allPages.length ? allPages : [""],
           createdAt: Date.now(),
           updatedAt: Date.now(),
         },
@@ -106,7 +120,7 @@ export default function Book() {
       setProof({});
       setApplied(new Set());
     } catch (e) {
-      setError((e as Error).message || "Couldn't read that PDF.");
+      setError((e as Error).message || "Couldn't read that file.");
     } finally {
       setBusy(false);
       setProgress(null);
@@ -114,16 +128,16 @@ export default function Book() {
   }
 
   function onInput(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (f) ingest(f);
+    const files = e.target.files ? Array.from(e.target.files) : [];
+    if (files.length) ingest(files);
     e.target.value = "";
   }
 
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragOver(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) ingest(f);
+    const files = e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
+    if (files.length) ingest(files);
   }
 
   function startBlank() {
@@ -367,15 +381,16 @@ export default function Book() {
         >
           <Upload className="mb-3 size-8 text-muted-foreground" />
           <p className="mb-1 text-sm font-medium">
-            Drop a book PDF here, or start writing from scratch
+            Drop your book here — PDF or Word (.docx) — or start from scratch
           </p>
           <p className="mb-4 text-xs text-muted-foreground">
-            A PDF is read locally; or begin a blank book and type your chapters.
+            Files are read locally. You can select several Word files at once
+            (one per chapter); or begin a blank book and type your chapters.
           </p>
           <div className="flex items-center gap-2">
             <Button onClick={() => fileRef.current?.click()}>
               <Upload className="size-4" />
-              Choose PDF
+              Choose file
             </Button>
             <Button variant="outline" onClick={startBlank}>
               <Plus className="size-4" />
@@ -385,7 +400,8 @@ export default function Book() {
           <input
             ref={fileRef}
             type="file"
-            accept=".pdf,application/pdf"
+            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            multiple
             onChange={onInput}
             className="hidden"
           />
