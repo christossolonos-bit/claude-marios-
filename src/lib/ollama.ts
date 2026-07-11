@@ -4,7 +4,7 @@
 // Packaged Tauri app: Rust commands (server-side request, bypasses CORS/proxy).
 
 import { invoke } from "@tauri-apps/api/core";
-import { getSettings } from "@/lib/settings";
+import { getSettings, saveSettings } from "@/lib/settings";
 
 const BASE = "http://localhost:11434";
 const OR_BASE = "https://openrouter.ai/api/v1";
@@ -210,6 +210,30 @@ export async function getOpenRouterFreeModels(): Promise<string[]> {
     )
     .map((m) => m.id)
     .sort();
+}
+
+// Embedding / speech / vision models that can't hold a chat — never auto-pick
+// these when healing the model selection.
+const NON_CHAT = /embed|bge|minilm|whisper|clip|reranker/i;
+
+// On startup, make sure the configured Ollama model is one the user actually
+// has installed. The default (qwen3.5:4b) won't exist on most machines, so a
+// fresh install would otherwise point the whole app at a missing model. If the
+// saved model isn't installed, adopt the first installed chat model and persist
+// it — so the Assistant, Writing, Book, etc. all work out of the box, and the
+// Dashboard reflects the real model. No-op for OpenRouter or if Ollama is down.
+export async function healActiveModel(): Promise<void> {
+  const s = getSettings();
+  if (s.provider !== "ollama") return;
+  let installed: string[];
+  try {
+    installed = await getModels();
+  } catch {
+    return; // Ollama not reachable — leave the setting as-is
+  }
+  if (!installed.length || installed.includes(s.model)) return;
+  const pick = installed.find((m) => !NON_CHAT.test(m)) ?? installed[0];
+  saveSettings({ ...s, model: pick });
 }
 
 export async function getModels(): Promise<string[]> {

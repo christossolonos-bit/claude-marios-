@@ -51,6 +51,13 @@ export default function Settings() {
       .catch(() => setFreeModelsError(true));
   }, [settings.provider, freeModels.length]);
 
+  // Persist on every change so a selection (e.g. the model) can never be lost
+  // by navigating away without pressing Save. The Save button stays as an
+  // explicit confirmation.
+  useEffect(() => {
+    saveSettings(settings);
+  }, [settings]);
+
   function update(patch: Partial<AppSettings>) {
     setSettings((s) => ({ ...s, ...patch }));
     setSaved(false);
@@ -343,7 +350,13 @@ export default function Settings() {
             <Save className="size-4" />
             Save settings
           </Button>
-          {saved && <span className="text-sm text-green-600">Saved ✓</span>}
+          <span className="text-sm text-muted-foreground">
+            {saved ? (
+              <span className="text-green-600">Saved ✓</span>
+            ) : (
+              "Changes are saved automatically."
+            )}
+          </span>
         </div>
 
         <Card className="border-red-200">

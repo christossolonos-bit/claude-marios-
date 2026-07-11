@@ -93,6 +93,9 @@ const APPLY_LABEL: Record<ApplyMode, string> = {
   title: "Use as title",
 };
 
+// Remembers which document was open so Writing reopens it on next launch.
+const LAST_DOC = "authorhub.writing.lastdoc";
+
 export default function Writing() {
   const [docs, setDocs] = useState<DocSummary[]>([]);
   const [docId, setDocId] = useState<string | null>(null);
@@ -119,7 +122,15 @@ export default function Writing() {
   }
 
   useEffect(() => {
-    refreshList();
+    (async () => {
+      const list = await listDocuments();
+      setDocs(list);
+      // Resume the last document the user was editing, if it still exists.
+      const last = localStorage.getItem(LAST_DOC);
+      if (last && list.some((d) => d.id === last)) {
+        openDoc(last);
+      }
+    })();
     ping().then(setOnline);
   }, []);
 
@@ -132,6 +143,7 @@ export default function Writing() {
     setTitle(doc.title);
     setBody(doc.body);
     setSavedAt(doc.updatedAt);
+    localStorage.setItem(LAST_DOC, doc.id);
   }
 
   async function newDoc() {
@@ -143,6 +155,7 @@ export default function Writing() {
     setTitle("");
     setBody("");
     setSavedAt(null);
+    localStorage.setItem(LAST_DOC, doc.id);
   }
 
   async function removeDoc(id: string) {
@@ -153,6 +166,7 @@ export default function Writing() {
       setTitle("");
       setBody("");
       setAssist(null);
+      localStorage.removeItem(LAST_DOC);
     }
     refreshList();
   }

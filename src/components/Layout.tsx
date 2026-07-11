@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { useEffect, useRef } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   CalendarDays,
@@ -13,6 +14,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useReminders } from "@/hooks/useReminders";
+import { healActiveModel } from "@/lib/ollama";
+
+const LAST_ROUTE = "authorhub.lastroute";
 
 const nav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -28,6 +32,31 @@ const nav = [
 
 export default function Layout() {
   useReminders();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const restored = useRef(false);
+
+  // On launch, make sure the saved model is actually installed on this machine.
+  useEffect(() => {
+    healActiveModel();
+  }, []);
+
+  // Reopen the tab the user was last on, so the app resumes where they left off
+  // instead of always starting on the Dashboard. Runs once, before the user
+  // navigates.
+  useEffect(() => {
+    if (restored.current) return;
+    restored.current = true;
+    const last = localStorage.getItem(LAST_ROUTE);
+    if (last && last !== location.pathname) {
+      navigate(last, { replace: true });
+    }
+  }, [location.pathname, navigate]);
+
+  // Remember the current tab for next launch.
+  useEffect(() => {
+    localStorage.setItem(LAST_ROUTE, location.pathname);
+  }, [location.pathname]);
 
   return (
     <div className="flex h-screen bg-background text-foreground">

@@ -7,11 +7,19 @@ import {
   CardContent,
   CardDescription,
 } from "@/components/ui/card";
-import { CalendarDays, PenLine, Flame, Bot } from "lucide-react";
+import { CalendarDays, PenLine, Flame, Bot, type LucideIcon } from "lucide-react";
 import { type Task, listTasks } from "@/lib/tasks";
 import { getStats, type WritingStats } from "@/lib/writingGoal";
+import { getSettings } from "@/lib/settings";
 import { todayISO, formatTimeLabel } from "@/lib/date";
 import DailyBriefing from "@/components/DailyBriefing";
+
+// Compact display for a model id: drop the provider prefix and the ":free"
+// suffix so long OpenRouter ids don't overflow the stat card.
+function shortModel(id: string): string {
+  const base = id.includes("/") ? id.split("/").pop()! : id;
+  return base.replace(/:free$/, "") || id;
+}
 
 export default function Dashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -27,7 +35,20 @@ export default function Dashboard() {
     .filter((t) => t.date === today && !t.done)
     .sort((a, b) => (a.time ?? "99").localeCompare(b.time ?? "99"));
 
-  const stats = [
+  // Reflect the model the app is actually configured to use, not a fixed name.
+  const cfg = getSettings();
+  const activeModel =
+    cfg.provider === "openrouter" ? cfg.openrouterModel : cfg.model;
+  const providerHint =
+    cfg.provider === "openrouter" ? "OpenRouter cloud" : "Local Ollama";
+
+  const stats: {
+    label: string;
+    value: string;
+    icon: LucideIcon;
+    hint: string;
+    title?: string;
+  }[] = [
     {
       label: "Tasks today",
       value: String(todayTasks.length),
@@ -46,7 +67,13 @@ export default function Dashboard() {
       icon: Flame,
       hint: "Days hitting your goal",
     },
-    { label: "Assistant", value: "qwen3.5:4b", icon: Bot, hint: "Local Ollama" },
+    {
+      label: "Assistant",
+      value: shortModel(activeModel),
+      icon: Bot,
+      hint: providerHint,
+      title: activeModel,
+    },
   ];
 
   return (
@@ -61,7 +88,12 @@ export default function Dashboard() {
                 <span className="text-sm text-muted-foreground">{s.label}</span>
                 <s.icon className="size-4 text-muted-foreground" />
               </div>
-              <div className="mt-2 text-2xl font-semibold">{s.value}</div>
+              <div
+                className="mt-2 truncate text-2xl font-semibold"
+                title={s.title ?? s.value}
+              >
+                {s.value}
+              </div>
               <div className="mt-1 text-xs text-muted-foreground">{s.hint}</div>
             </CardContent>
           </Card>
