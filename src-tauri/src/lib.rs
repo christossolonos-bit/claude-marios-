@@ -108,6 +108,30 @@ fn save_store(app: tauri::AppHandle, data: String) -> Result<(), String> {
     Ok(())
 }
 
+// Save an exported file (e.g. the Kindle .docx) into Documents/AuthorHub and
+// return its full path. The webview can't trigger a real file download, so the
+// frontend hands us the bytes (base64) and we write them to disk.
+#[tauri::command]
+fn save_export(
+    app: tauri::AppHandle,
+    filename: String,
+    data: String,
+) -> Result<String, String> {
+    let docs = app
+        .path()
+        .document_dir()
+        .map_err(|e| format!("Couldn't find the Documents folder: {e}"))?;
+    let dir = docs.join("AuthorHub");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let safe = filename.replace(['/', '\\'], "_");
+    let path = dir.join(safe);
+    let bytes = general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|e| e.to_string())?;
+    fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -118,7 +142,8 @@ pub fn run() {
             ollama_chat,
             fish_tts,
             load_store,
-            save_store
+            save_store,
+            save_export
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

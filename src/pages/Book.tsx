@@ -24,7 +24,7 @@ import {
   extractDocx,
 } from "@/lib/manuscript";
 import { proofreadText } from "@/lib/proofread";
-import { TRIM_SIZES, exportDocx, downloadBlob } from "@/lib/kindleExport";
+import { TRIM_SIZES, exportDocx, saveBlob } from "@/lib/kindleExport";
 import { ping } from "@/lib/ollama";
 import { Button } from "@/components/ui/button";
 import MicButton from "@/components/MicButton";
@@ -52,6 +52,7 @@ export default function Book() {
   const [liveProof, setLiveProof] = useState(false);
   const [trimId, setTrimId] = useState("6x9");
   const [exporting, setExporting] = useState(false);
+  const [savedPath, setSavedPath] = useState<string | null>(null);
 
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -326,6 +327,7 @@ export default function Book() {
     if (!manuscript) return;
     setExporting(true);
     setError(null);
+    setSavedPath(null);
     try {
       const trim = TRIM_SIZES.find((t) => t.id === trimId) ?? TRIM_SIZES[0];
       const blob = await exportDocx({
@@ -337,7 +339,9 @@ export default function Book() {
         (manuscript.title.trim() || "book")
           .replace(/[^\p{L}\p{N} _-]/gu, "")
           .trim() || "book";
-      downloadBlob(blob, `${safe}.docx`);
+      const path = await saveBlob(blob, `${safe}.docx`);
+      // Desktop returns the saved path; the browser preview just downloads.
+      setSavedPath(path ?? `${safe}.docx`);
     } catch (e) {
       setError((e as Error).message || "Couldn't create the export.");
     } finally {
@@ -349,6 +353,12 @@ export default function Book() {
     ? manuscript.pages.reduce((n, p) => n + countWords(p), 0)
     : 0;
   const proofDisabled = anyBusy || online === false;
+
+  // On-screen page dimensions reflect the selected KDP trim (at 96px/inch) so
+  // the pages visibly resize when you change the size.
+  const trim = TRIM_SIZES.find((t) => t.id === trimId) ?? TRIM_SIZES[0];
+  const pageW = Math.round(trim.width * 96);
+  const pageMinH = Math.round(trim.height * 96);
 
   return (
     <div className="mx-auto flex h-full max-w-4xl flex-col p-8">
@@ -514,13 +524,25 @@ export default function Book() {
               <Download className="size-4" />
               {exporting ? "Exporting…" : "Export .docx"}
             </Button>
+            {savedPath && (
+              <div className="flex basis-full items-center gap-1.5 text-xs text-green-700">
+                <CheckCircle2 className="size-3.5 shrink-0" />
+                <span className="min-w-0 break-all">
+                  Saved to <span className="font-medium">{savedPath}</span>
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1">
             {manuscript.pages.map((p, i) => {
               const pr = proof[i];
               return (
-                <div key={i} className="mx-auto w-full max-w-[794px]">
+                <div
+                  key={i}
+                  className="mx-auto w-full"
+                  style={{ maxWidth: pageW }}
+                >
                   <div className="mb-1 flex items-center justify-between px-1">
                     <span className="text-xs font-medium text-muted-foreground">
                       Page {i + 1}
@@ -563,7 +585,8 @@ export default function Book() {
                     value={p}
                     onChange={(e) => updatePage(i, e.target.value)}
                     placeholder="Write this chapter…"
-                    className="block min-h-[460px] w-full resize-none rounded-sm bg-white px-16 py-16 font-serif text-[15px] leading-7 text-zinc-900 shadow-sm ring-1 ring-black/5 [field-sizing:content] placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    style={{ minHeight: pageMinH }}
+                    className="block w-full resize-none rounded-sm bg-white px-16 py-16 font-serif text-[15px] leading-7 text-zinc-900 shadow-sm ring-1 ring-black/5 [field-sizing:content] placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-primary/40"
                   />
 
                   {pr && (
@@ -624,7 +647,7 @@ export default function Book() {
               );
             })}
 
-            <div className="mx-auto w-full max-w-[794px] pb-4">
+            <div className="mx-auto w-full pb-4" style={{ maxWidth: pageW }}>
               <Button variant="outline" onClick={addPage} className="w-full">
                 <Plus className="size-4" />
                 Add page

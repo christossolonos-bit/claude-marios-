@@ -117,7 +117,36 @@ export async function exportDocx(opts: {
   return Packer.toBlob(doc);
 }
 
-export function downloadBlob(blob: Blob, filename: string): void {
+function inTauri(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    (window as unknown as { __TAURI_INTERNALS__?: unknown })
+      .__TAURI_INTERNALS__ !== undefined
+  );
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+// Save an exported blob. In the packaged app the webview can't trigger a real
+// download, so we write the bytes to disk via Rust and return the saved path.
+// In the browser preview we fall back to a normal download (returns null).
+export async function saveBlob(
+  blob: Blob,
+  filename: string,
+): Promise<string | null> {
+  if (inTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const data = await blobToBase64(blob);
+    return invoke<string>("save_export", { filename, data });
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -126,4 +155,5 @@ export function downloadBlob(blob: Blob, filename: string): void {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return null;
 }
