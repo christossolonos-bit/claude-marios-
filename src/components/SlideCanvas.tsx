@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { type SlideElement, SLIDE_REF_W } from "@/lib/decks";
+import { type SlideElement } from "@/lib/decks";
+import { textCss, ShapeView } from "@/components/slideParts";
 import { cn } from "@/lib/utils";
 
-const pxToCqw = (px: number) => (px / SLIDE_REF_W) * 100;
 const MIN = 4; // minimum element width/height in % of slide
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -145,14 +145,7 @@ export default function SlideCanvas({
           width: `${el.w}%`,
           height: `${el.h}%`,
         };
-        const textStyle: React.CSSProperties = {
-          fontSize: `${pxToCqw(el.fontSize ?? 24)}cqw`,
-          fontWeight: el.bold ? 700 : 400,
-          fontStyle: el.italic ? "italic" : "normal",
-          textAlign: el.align ?? "left",
-          color: el.color ?? "#171717",
-          lineHeight: 1.25,
-        };
+        const textStyle = textCss(el);
         return (
           <div
             key={el.id}
@@ -184,6 +177,8 @@ export default function SlideCanvas({
                   image
                 </div>
               )
+            ) : el.type === "shape" ? (
+              <ShapeView el={el} />
             ) : editing ? (
               <textarea
                 autoFocus

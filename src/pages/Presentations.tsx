@@ -16,12 +16,17 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
+  Circle,
+  Minus,
+  Copy,
 } from "lucide-react";
 import {
   type Deck,
   type DeckSummary,
   type Slide,
   type SlideElement,
+  type ShapeKind,
+  SLIDE_FONTS,
   newSlide,
   newElement,
   elementsForSlide,
@@ -156,6 +161,12 @@ export default function Presentations() {
     setSelElId(el.id);
   }
 
+  function addShape(kind: ShapeKind) {
+    const el = newElement("shape", { shape: kind });
+    setElements([...els, el]);
+    setSelElId(el.id);
+  }
+
   async function addImageFromFile(file: File) {
     setImgError(null);
     try {
@@ -198,6 +209,28 @@ export default function Presentations() {
     const slides = deck.slides.filter((_, idx) => idx !== i);
     persist({ ...deck, slides });
     setSel((s) => Math.max(0, Math.min(s, slides.length - 1)));
+  }
+
+  // Duplicate a slide (deep copy with fresh ids) right after it.
+  function duplicateSlide(i: number) {
+    if (!deck) return;
+    const src = deck.slides[i];
+    const copy: Slide = {
+      ...src,
+      id: crypto.randomUUID(),
+      bullets: [...src.bullets],
+      elements: elementsForSlide(src).map((e) => ({
+        ...e,
+        id: crypto.randomUUID(),
+      })),
+    };
+    const slides = [
+      ...deck.slides.slice(0, i + 1),
+      copy,
+      ...deck.slides.slice(i + 1),
+    ];
+    persist({ ...deck, slides });
+    setSel(i + 1);
   }
 
   // Reorder slides by dragging thumbnails.
@@ -397,6 +430,16 @@ export default function Presentations() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
+                    duplicateSlide(i);
+                  }}
+                  title="Duplicate slide"
+                  className="absolute right-7 top-1 z-10 rounded bg-black/40 p-0.5 text-white opacity-0 transition group-hover:opacity-100 hover:bg-primary"
+                >
+                  <Copy className="size-3" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
                     removeSlide(i);
                   }}
                   title="Delete slide"
@@ -456,6 +499,30 @@ export default function Presentations() {
                       e.target.value = "";
                     }}
                   />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => addShape("rect")}
+                    title="Add rectangle"
+                  >
+                    <Square className="size-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => addShape("ellipse")}
+                    title="Add ellipse"
+                  >
+                    <Circle className="size-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => addShape("line")}
+                    title="Add line"
+                  >
+                    <Minus className="size-4" />
+                  </Button>
 
                   {selEl && selEl.type === "text" && (
                     <>
@@ -533,6 +600,122 @@ export default function Presentations() {
                         title="Text color"
                         className="size-8 cursor-pointer rounded border border-border bg-background p-0.5"
                       />
+                      <select
+                        value={selEl.fontFamily ?? ""}
+                        onChange={(e) =>
+                          patchEl(selEl.id, { fontFamily: e.target.value })
+                        }
+                        title="Font"
+                        className="h-8 rounded-md border border-border bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        {SLIDE_FONTS.map((f) => (
+                          <option key={f.label} value={f.value}>
+                            {f.label}
+                          </option>
+                        ))}
+                      </select>
+                      <label
+                        className="flex items-center gap-1 text-xs text-muted-foreground"
+                        title="Text-box background"
+                      >
+                        Fill
+                        <input
+                          type="color"
+                          value={
+                            selEl.bg && selEl.bg !== "transparent"
+                              ? selEl.bg
+                              : "#ffffff"
+                          }
+                          onChange={(e) =>
+                            patchEl(selEl.id, { bg: e.target.value })
+                          }
+                          className="size-8 cursor-pointer rounded border border-border bg-background p-0.5"
+                        />
+                      </label>
+                      {selEl.bg && selEl.bg !== "transparent" && (
+                        <button
+                          onClick={() => patchEl(selEl.id, { bg: "" })}
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                          title="Clear background"
+                        >
+                          none
+                        </button>
+                      )}
+                    </>
+                  )}
+
+                  {selEl && selEl.type === "shape" && (
+                    <>
+                      <span className="mx-1 h-5 w-px bg-border" />
+                      {selEl.shape !== "line" && (
+                        <label
+                          className="flex items-center gap-1 text-xs text-muted-foreground"
+                          title="Fill color"
+                        >
+                          Fill
+                          <input
+                            type="color"
+                            value={selEl.fill ?? "#dbeafe"}
+                            onChange={(e) =>
+                              patchEl(selEl.id, { fill: e.target.value })
+                            }
+                            className="size-8 cursor-pointer rounded border border-border bg-background p-0.5"
+                          />
+                        </label>
+                      )}
+                      <label
+                        className="flex items-center gap-1 text-xs text-muted-foreground"
+                        title={
+                          selEl.shape === "line" ? "Line color" : "Border color"
+                        }
+                      >
+                        {selEl.shape === "line" ? "Line" : "Border"}
+                        <input
+                          type="color"
+                          value={selEl.stroke ?? "#3b82f6"}
+                          onChange={(e) =>
+                            patchEl(selEl.id, { stroke: e.target.value })
+                          }
+                          className="size-8 cursor-pointer rounded border border-border bg-background p-0.5"
+                        />
+                      </label>
+                      <div className="flex items-center rounded-md border border-border">
+                        <button
+                          onClick={() =>
+                            patchEl(selEl.id, {
+                              strokeWidth: Math.max(
+                                0,
+                                (selEl.strokeWidth ?? 0) - 1,
+                              ),
+                            })
+                          }
+                          className="px-2 py-1 text-sm hover:bg-accent"
+                          title={
+                            selEl.shape === "line" ? "Thinner" : "Thinner border"
+                          }
+                        >
+                          −
+                        </button>
+                        <span className="w-6 text-center text-xs text-muted-foreground">
+                          {selEl.strokeWidth ?? 0}
+                        </span>
+                        <button
+                          onClick={() =>
+                            patchEl(selEl.id, {
+                              strokeWidth: Math.min(
+                                40,
+                                (selEl.strokeWidth ?? 0) + 1,
+                              ),
+                            })
+                          }
+                          className="px-2 py-1 text-sm hover:bg-accent"
+                          title={
+                            selEl.shape === "line" ? "Thicker" : "Thicker border"
+                          }
+                        >
+                          +
+                        </button>
+                      </div>
                     </>
                   )}
 

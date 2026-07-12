@@ -8,7 +8,8 @@ export type SlideLayout = "title" | "bullets" | "section" | "free" | "image";
 // PowerPoint-style free-canvas element. Positions and sizes are percentages of
 // the slide (0–100) so they scale to any rendered size. Font size is in px on a
 // 960px-wide reference slide and scaled with the slide via container units.
-export type ElementType = "text" | "image";
+export type ElementType = "text" | "image" | "shape";
+export type ShapeKind = "rect" | "ellipse" | "line";
 
 export interface SlideElement {
   id: string;
@@ -20,13 +21,32 @@ export interface SlideElement {
   // text elements
   text?: string;
   fontSize?: number;
+  fontFamily?: string; // CSS font-family; "" / undefined = the app's sans default
   bold?: boolean;
   italic?: boolean;
   align?: "left" | "center" | "right";
   color?: string;
+  bg?: string; // text-box background fill ("" / undefined = transparent)
   // image elements
   src?: string;
+  // shape elements
+  shape?: ShapeKind;
+  fill?: string; // rect/ellipse fill
+  stroke?: string; // border colour, and the line colour for "line"
+  strokeWidth?: number; // border width, and the thickness for "line"
 }
+
+// Curated font choices (all standard Windows fonts so they render on the dad's
+// machine). "" means inherit the app's default sans.
+export const SLIDE_FONTS: { label: string; value: string }[] = [
+  { label: "Sans", value: "" },
+  { label: "Serif", value: "Georgia, serif" },
+  { label: "Times", value: "'Times New Roman', serif" },
+  { label: "Arial", value: "Arial, sans-serif" },
+  { label: "Verdana", value: "Verdana, sans-serif" },
+  { label: "Trebuchet", value: "'Trebuchet MS', sans-serif" },
+  { label: "Mono", value: "'Courier New', monospace" },
+];
 
 export interface Slide {
   id: string;
@@ -49,19 +69,40 @@ export function newElement(
   type: ElementType,
   init: Partial<SlideElement> = {},
 ): SlideElement {
-  return {
+  const common = {
     id: crypto.randomUUID(),
     type,
-    x: type === "image" ? 30 : 10,
-    y: type === "image" ? 25 : 40,
-    w: type === "image" ? 40 : 50,
-    h: type === "image" ? 45 : 15,
-    text: type === "text" ? "Text" : undefined,
-    fontSize: type === "text" ? 28 : undefined,
     bold: false,
     italic: false,
-    align: "left",
+    align: "left" as const,
     color: "#171717",
+  };
+  if (type === "image") {
+    return { ...common, x: 30, y: 25, w: 40, h: 45, ...init };
+  }
+  if (type === "shape") {
+    const shape = init.shape ?? "rect";
+    return {
+      ...common,
+      x: 30,
+      y: shape === "line" ? 48 : 30,
+      w: 40,
+      h: shape === "line" ? 4 : 30,
+      shape,
+      fill: "#dbeafe",
+      stroke: "#3b82f6",
+      strokeWidth: shape === "line" ? 4 : 0,
+      ...init,
+    };
+  }
+  return {
+    ...common,
+    x: 10,
+    y: 40,
+    w: 50,
+    h: 15,
+    text: "Text",
+    fontSize: 28,
     ...init,
   };
 }
