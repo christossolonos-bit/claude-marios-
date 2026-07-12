@@ -203,8 +203,8 @@ export default function Assistant() {
       content: m.content,
     }));
 
-    // Retrieve-before-generate: pull relevant bits from past chats + project/
-    // seminar notes and inject them into the single model call's context, so the
+    // Retrieve-before-generate: pull relevant bits from past chats and inject
+    // them into the single model call's context, so the
     // assistant can answer from history without a second request.
     const system = await buildSystemPrompt();
     const recalled = await recall(text, { excludeConversationId: convoId ?? undefined });

@@ -1,18 +1,16 @@
 // Recall engine — local, keyword-based "retrieve-before-generate" search across
-// the dad's past conversations AND his project/seminar notes. Runs on each user
-// message BEFORE the model replies, so the relevant history is injected into the
-// single model call's context (no extra request — respects one-request-per-message).
-// Fully local; nothing leaves the machine.
+// the user's past conversations. Runs on each user message BEFORE the model
+// replies, so the relevant history is injected into the single model call's
+// context (no extra request — respects one-request-per-message). Fully local;
+// nothing leaves the machine.
 
 import { allConversations } from "./conversations";
-import { listProjects } from "./projects";
-import { listSeminars } from "./seminars";
 
-export type RecallSource = "chat" | "project" | "seminar";
+export type RecallSource = "chat";
 
 export interface RecallItem {
   source: RecallSource;
-  label: string; // conversation title / project name / seminar title
+  label: string; // conversation title
   when: number;
   text: string; // snippet around the match
   score: number;
@@ -62,8 +60,8 @@ function snippetAround(text: string, terms: Set<string>): string {
 }
 
 /**
- * Search chats + project/seminar notes for the query. Returns the top matches
- * across all sources, most-relevant first (recency breaks ties).
+ * Search past chats for the query. Returns the top matches, most-relevant first
+ * (recency breaks ties).
  */
 export async function recall(
   query: string,
@@ -73,12 +71,7 @@ export async function recall(
   if (!terms.size) return [];
   const limit = opts.limit ?? 4;
 
-  const [convos, projects, seminars] = await Promise.all([
-    allConversations(),
-    listProjects(),
-    listSeminars(),
-  ]);
-
+  const convos = await allConversations();
   const items: RecallItem[] = [];
 
   // Past conversations — score whole convo, snippet from best-matching message.
@@ -102,44 +95,10 @@ export async function recall(
       });
   }
 
-  // Projects — name + description.
-  for (const p of projects) {
-    const body = `${p.name}\n${p.description}`;
-    const score = overlap(body, terms);
-    if (score > 0)
-      items.push({
-        source: "project",
-        label: p.name,
-        when: p.createdAt,
-        text: snippetAround(p.description || p.name, terms),
-        score,
-      });
-  }
-
-  // Seminars — title + raw notes + outline.
-  for (const s of seminars) {
-    const body = `${s.title}\n${s.notes}\n${s.outline}`;
-    const score = overlap(body, terms);
-    if (score > 0)
-      items.push({
-        source: "seminar",
-        label: s.title,
-        when: s.createdAt,
-        text: snippetAround(`${s.notes} ${s.outline}`.trim() || s.title, terms),
-        score,
-      });
-  }
-
   return items
     .sort((a, b) => b.score - a.score || b.when - a.when)
     .slice(0, limit);
 }
-
-const SOURCE_LABEL: Record<RecallSource, string> = {
-  chat: "past chat",
-  project: "project",
-  seminar: "seminar",
-};
 
 /** Format recalled items for injection into the assistant's system prompt. */
 export function recallContext(items: RecallItem[]): string {
@@ -150,9 +109,9 @@ export function recallContext(items: RecallItem[]): string {
       day: "numeric",
       year: "numeric",
     });
-    return `- [${SOURCE_LABEL[it.source]}: "${it.label}", ${when}] ${it.text}`;
+    return `- [past chat: "${it.label}", ${when}] ${it.text}`;
   });
-  return `Possibly relevant material from the user's earlier chats, projects, and seminar notes. Use it only if it genuinely helps answer, and say when you're drawing on something he noted earlier:\n${lines.join(
+  return `Possibly relevant material from the user's earlier chats. Use it only if it genuinely helps answer, and say when you're drawing on something he noted earlier:\n${lines.join(
     "\n",
   )}`;
 }

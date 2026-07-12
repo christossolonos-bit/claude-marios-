@@ -214,7 +214,7 @@ export default function Settings() {
                 onChange={(e) => update({ useContext: e.target.checked })}
                 className="mt-0.5"
               />
-              Let the assistant see today's tasks and active projects for context
+              Let the assistant see today's tasks and your writing for context
             </label>
           </CardContent>
         </Card>
@@ -391,8 +391,8 @@ export default function Settings() {
               <div className="text-sm">
                 <div className="font-medium">Erase all data</div>
                 <div className="text-muted-foreground">
-                  Delete all tasks, projects, seminars, writing, chats, memory,
-                  and settings — a clean slate for a new person.
+                  Delete all tasks, writing, chats, memory, and settings — a
+                  clean slate for a new person.
                 </div>
               </div>
               <Button
@@ -414,8 +414,8 @@ export default function Settings() {
         </h2>
         <p className="mb-5 text-sm text-muted-foreground">
           {confirm === "all"
-            ? "This permanently deletes everything in the app on this device — tasks, projects, seminars, documents, chats, learned memory, and settings. This can't be undone."
-            : "This permanently forgets everything the assistant has learned about you. Your tasks, projects, and writing are kept. This can't be undone."}
+            ? "This permanently deletes everything in the app on this device — tasks, documents, chats, learned memory, and settings. This can't be undone."
+            : "This permanently forgets everything the assistant has learned about you. Your tasks and writing are kept. This can't be undone."}
         </p>
         <div className="flex justify-end gap-2">
           <Button variant="outline" size="sm" onClick={() => setConfirm(null)}>
