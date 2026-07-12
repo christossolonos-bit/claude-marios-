@@ -1,9 +1,10 @@
 // Text-to-speech.
 //
-// If a Fish Audio API key is set (and we're in the desktop app), use that cloud
-// voice — the request goes through Rust so there's no browser CORS. Otherwise
-// (or on any failure) fall back to the local browser voice, which is free,
-// offline, and private.
+// Three voices, chosen by the ttsProvider setting: "edge" (free Microsoft
+// neural voices, no key, needs internet), "fish" (Fish Audio cloud, needs an
+// API key), or "local" (the OS browser voice — free, offline, private). The
+// cloud voices go through Rust so there's no browser CORS, and any failure
+// falls back to the local voice so speaking always works.
 
 import { getSettings } from "@/lib/settings";
 
@@ -40,7 +41,31 @@ export async function speak(text: string): Promise<void> {
   if (!clean) return;
 
   const s = getSettings();
-  if (inTauri() && s.fishApiKey && s.fishVoiceId) {
+
+  // Play a base64 MP3 returned by a cloud voice command. Returns false so the
+  // caller can fall back to the local voice on any failure.
+  async function playMp3(b64: string): Promise<void> {
+    stopSpeaking();
+    const audio = new Audio(`data:audio/mpeg;base64,${b64}`);
+    currentAudio = audio;
+    await audio.play();
+  }
+
+  if (inTauri() && s.ttsProvider === "edge" && s.edgeVoice) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const b64 = await invoke<string>("edge_tts", {
+        text: clean,
+        voice: s.edgeVoice,
+      });
+      await playMp3(b64);
+      return;
+    } catch {
+      // fall through to the local voice
+    }
+  }
+
+  if (inTauri() && s.ttsProvider === "fish" && s.fishApiKey && s.fishVoiceId) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const b64 = await invoke<string>("fish_tts", {
@@ -48,10 +73,7 @@ export async function speak(text: string): Promise<void> {
         voiceId: s.fishVoiceId,
         text: clean,
       });
-      stopSpeaking();
-      const audio = new Audio(`data:audio/mpeg;base64,${b64}`);
-      currentAudio = audio;
-      await audio.play();
+      await playMp3(b64);
       return;
     } catch {
       // fall through to the local voice

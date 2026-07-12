@@ -132,6 +132,195 @@ fn save_export(
     Ok(path.to_string_lossy().to_string())
 }
 
+// ---- Edge TTS (free Microsoft neural voices) --------------------------------
+// Speaks text via the same online service as Edge's "Read Aloud". It's a
+// WebSocket protocol that needs a time-based token (Sec-MS-GEC) and specific
+// headers, so it runs here in Rust. Returns base64 MP3, like fish_tts. Used as
+// a no-API-key cloud voice (handy while Fish Audio is unavailable).
+
+const EDGE_TRUSTED_TOKEN: &str = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+// Kept in sync with the edge-tts library (currently Chromium 143); Microsoft
+// rejects stale versions with a 403.
+const EDGE_VERSION: &str = "143.0.3650.75";
+const EDGE_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0";
+
+fn unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+// Rolling auth token: SHA-256 of (Windows-epoch ticks rounded to 5 min) + token.
+// `skew` corrects for a difference between this machine's clock and the server's
+// (the server tells us via its Date header on a 403).
+//
+// IMPORTANT: the ticks×10^7 must be computed as an f64 (like edge-tts and real
+// Edge browsers, which use JS/Python floats). That product (~10^17) exceeds
+// f64's exact-integer range, so it rounds — and the server validates against
+// that rounded value. Exact integer math produces a different number → 403.
+fn edge_gec_token(skew: i64) -> String {
+    use sha2::{Digest, Sha256};
+    let secs = (unix_secs() + skew + 11_644_473_600) as f64; // seconds since 1601
+    let rounded = secs - (secs % 300.0); // round down to 5 minutes
+    let ticks = rounded * 1e7_f64; // 100-ns intervals, as a float (may round)
+    let ticks_str = format!("{ticks:.0}");
+    let hash = Sha256::digest(format!("{ticks_str}{EDGE_TRUSTED_TOKEN}").as_bytes());
+    hash.iter().map(|b| format!("{b:02X}")).collect()
+}
+
+// Parse an HTTP Date header ("Sat, 12 Jul 2026 12:00:00 GMT") to a unix time.
+fn parse_http_date(s: &str) -> Option<i64> {
+    chrono::NaiveDateTime::parse_from_str(s.trim(), "%a, %d %b %Y %H:%M:%S GMT")
+        .ok()
+        .map(|dt| dt.and_utc().timestamp())
+}
+
+fn edge_timestamp() -> String {
+    chrono::Utc::now()
+        .format("%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)")
+        .to_string()
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\'', "&apos;")
+        .replace('"', "&quot;")
+}
+
+#[tauri::command]
+async fn edge_tts(text: String, voice: String) -> Result<String, String> {
+    let audio = edge_synthesize(&text, &voice).await?;
+    Ok(general_purpose::STANDARD.encode(&audio))
+}
+
+// The Edge TTS WebSocket exchange, returning raw MP3 bytes. Public so it can be
+// exercised by an example/integration check without the Tauri layer.
+pub async fn edge_synthesize(text: &str, voice: &str) -> Result<Vec<u8>, String> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::{Error as WsError, Message};
+
+    // Connect, correcting for clock skew. Microsoft rejects the time-based token
+    // with a 403 if our clock differs from theirs; the 403 carries a Date header
+    // we use to recompute the token and retry once.
+    let mut skew: i64 = 0;
+    let ws = loop {
+        // Match the parameters edge-tts currently uses — Microsoft 403s stale
+        // Chromium versions. Bump EDGE_VERSION when Edge TTS starts failing.
+        let url = format!(
+            "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken={}&Sec-MS-GEC={}&Sec-MS-GEC-Version=1-{}",
+            EDGE_TRUSTED_TOKEN,
+            edge_gec_token(skew),
+            EDGE_VERSION
+        );
+        let mut request = url.into_client_request().map_err(|e| e.to_string())?;
+        {
+            let h = request.headers_mut();
+            h.insert("Pragma", "no-cache".parse().unwrap());
+            h.insert("Cache-Control", "no-cache".parse().unwrap());
+            h.insert(
+                "Origin",
+                "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"
+                    .parse()
+                    .unwrap(),
+            );
+            h.insert(
+                "Accept-Encoding",
+                "gzip, deflate, br, zstd".parse().unwrap(),
+            );
+            h.insert("Accept-Language", "en-US,en;q=0.9".parse().unwrap());
+            h.insert("User-Agent", EDGE_USER_AGENT.parse().unwrap());
+        }
+
+        match tokio_tungstenite::connect_async(request).await {
+            Ok((ws, _)) => break ws,
+            // First 403: correct our clock from the server's Date header, retry.
+            Err(WsError::Http(resp)) if skew == 0 => {
+                let server = resp
+                    .headers()
+                    .get("date")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(parse_http_date);
+                match server {
+                    Some(server_secs) => {
+                        skew = server_secs - unix_secs();
+                        continue;
+                    }
+                    None => {
+                        return Err(format!(
+                            "Edge TTS connection failed: HTTP {}",
+                            resp.status()
+                        ))
+                    }
+                }
+            }
+            Err(e) => return Err(format!("Edge TTS connection failed: {e}")),
+        }
+    };
+    let (mut write, mut read) = ws.split();
+
+    let ts = edge_timestamp();
+    let req_id: String = format!(
+        "{:032x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+
+    let config = format!(
+        "X-Timestamp:{ts}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{{\"context\":{{\"synthesis\":{{\"audio\":{{\"metadataoptions\":{{\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"false\"}},\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}}}}}"
+    );
+    write
+        .send(Message::Text(config))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let ssml = format!(
+        "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice name='{voice}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>{}</prosody></voice></speak>",
+        xml_escape(&text)
+    );
+    let ssml_msg = format!(
+        "X-RequestId:{req_id}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:{ts}\r\nPath:ssml\r\n\r\n{ssml}"
+    );
+    write
+        .send(Message::Text(ssml_msg))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut audio: Vec<u8> = Vec::new();
+    while let Some(msg) = read.next().await {
+        match msg.map_err(|e| e.to_string())? {
+            Message::Binary(data) => {
+                if data.len() < 2 {
+                    continue;
+                }
+                let header_len = ((data[0] as usize) << 8) | (data[1] as usize);
+                let start = 2 + header_len;
+                if start <= data.len() {
+                    audio.extend_from_slice(&data[start..]);
+                }
+            }
+            Message::Text(t) => {
+                if t.contains("Path:turn.end") {
+                    break;
+                }
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+    let _ = write.close().await;
+
+    if audio.is_empty() {
+        return Err("Edge TTS returned no audio".to_string());
+    }
+    Ok(audio)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -143,7 +332,8 @@ pub fn run() {
             fish_tts,
             load_store,
             save_store,
-            save_export
+            save_export,
+            edge_tts
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

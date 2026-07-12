@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Settings as SettingsIcon, Save, Trash2, ShieldAlert } from "lucide-react";
 import {
   type Settings as AppSettings,
+  EDGE_VOICES,
   getSettings,
   saveSettings,
   DEFAULT_PERSONA,
@@ -291,32 +292,74 @@ export default function Settings() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Voice (Fish Audio)</CardTitle>
+            <CardTitle>Voice</CardTitle>
             <CardDescription>
-              A higher-quality cloud voice. Note: when this is set, the reply
-              text is sent to Fish Audio's servers to be spoken. Leave the API
-              key blank to use the free, offline local voice.
+              How replies and reminders are read aloud. Local is free, offline,
+              and private. Edge and Fish Audio are higher-quality cloud voices —
+              they send the reply text to their servers to be spoken.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-4">
             <div>
-              <label className="text-sm font-medium">API key</label>
-              <Input
-                type="password"
-                value={settings.fishApiKey}
-                onChange={(e) => update({ fishApiKey: e.target.value })}
-                className="mt-1"
-                placeholder="Fish Audio API key (stored only on this device)"
-              />
+              <label className="text-sm font-medium">Voice source</label>
+              <select
+                value={settings.ttsProvider}
+                onChange={(e) =>
+                  update({
+                    ttsProvider: e.target.value as AppSettings["ttsProvider"],
+                  })
+                }
+                className={`${selectClass} mt-1`}
+              >
+                <option value="local">Local — your device's voice (offline)</option>
+                <option value="edge">Edge — free online neural voices (no key)</option>
+                <option value="fish">Fish Audio — cloud voice (API key)</option>
+              </select>
             </div>
-            <div>
-              <label className="text-sm font-medium">Voice ID</label>
-              <Input
-                value={settings.fishVoiceId}
-                onChange={(e) => update({ fishVoiceId: e.target.value })}
-                className="mt-1"
-              />
-            </div>
+
+            {settings.ttsProvider === "edge" && (
+              <div>
+                <label className="text-sm font-medium">Edge voice</label>
+                <select
+                  value={settings.edgeVoice}
+                  onChange={(e) => update({ edgeVoice: e.target.value })}
+                  className={`${selectClass} mt-1`}
+                >
+                  {EDGE_VOICES.map((v) => (
+                    <option key={v.value} value={v.value}>
+                      {v.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Free Microsoft neural voices (like Edge's Read Aloud). Needs
+                  internet; works in the installed app.
+                </p>
+              </div>
+            )}
+
+            {settings.ttsProvider === "fish" && (
+              <>
+                <div>
+                  <label className="text-sm font-medium">API key</label>
+                  <Input
+                    type="password"
+                    value={settings.fishApiKey}
+                    onChange={(e) => update({ fishApiKey: e.target.value })}
+                    className="mt-1"
+                    placeholder="Fish Audio API key (stored only on this device)"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Voice ID</label>
+                  <Input
+                    value={settings.fishVoiceId}
+                    onChange={(e) => update({ fishVoiceId: e.target.value })}
+                    className="mt-1"
+                  />
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 
