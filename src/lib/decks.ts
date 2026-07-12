@@ -5,6 +5,29 @@
 
 export type SlideLayout = "title" | "bullets" | "section" | "free" | "image";
 
+// PowerPoint-style free-canvas element. Positions and sizes are percentages of
+// the slide (0–100) so they scale to any rendered size. Font size is in px on a
+// 960px-wide reference slide and scaled with the slide via container units.
+export type ElementType = "text" | "image";
+
+export interface SlideElement {
+  id: string;
+  type: ElementType;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  // text elements
+  text?: string;
+  fontSize?: number;
+  bold?: boolean;
+  italic?: boolean;
+  align?: "left" | "center" | "right";
+  color?: string;
+  // image elements
+  src?: string;
+}
+
 export interface Slide {
   id: string;
   layout: SlideLayout;
@@ -14,6 +37,33 @@ export interface Slide {
   body: string; // free-form text, used by the "free" layout
   image: string; // data-URL image, used by the "image" layout (title = caption)
   notes: string; // speaker notes (not shown on the slide)
+  // Free-canvas elements. When empty (AI-generated or older slides), elements
+  // are synthesized from the layout fields above via elementsForSlide().
+  elements: SlideElement[];
+}
+
+// Reference slide width the element font sizes are authored against.
+export const SLIDE_REF_W = 960;
+
+export function newElement(
+  type: ElementType,
+  init: Partial<SlideElement> = {},
+): SlideElement {
+  return {
+    id: crypto.randomUUID(),
+    type,
+    x: type === "image" ? 30 : 10,
+    y: type === "image" ? 25 : 40,
+    w: type === "image" ? 40 : 50,
+    h: type === "image" ? 45 : 15,
+    text: type === "text" ? "Text" : undefined,
+    fontSize: type === "text" ? 28 : undefined,
+    bold: false,
+    italic: false,
+    align: "left",
+    color: "#171717",
+    ...init,
+  };
 }
 
 export interface Deck {
@@ -54,8 +104,121 @@ export function newSlide(
     body: "",
     image: "",
     notes: "",
+    elements: [],
     ...init,
   };
+}
+
+// Build canvas elements for a slide that has none yet — so AI-generated and
+// pre-canvas slides render (and become editable) on the free canvas. Once the
+// user edits on the canvas, the slide's own `elements` are saved and used.
+export function elementsForSlide(slide: Slide): SlideElement[] {
+  if (slide.elements && slide.elements.length) return slide.elements;
+
+  const els: SlideElement[] = [];
+  const text = (init: Partial<SlideElement>) =>
+    els.push(newElement("text", init));
+
+  switch (slide.layout) {
+    case "title":
+      text({
+        x: 8,
+        y: 32,
+        w: 84,
+        h: 22,
+        text: slide.title || "Presentation title",
+        fontSize: 48,
+        bold: true,
+        align: "center",
+      });
+      if (slide.subtitle)
+        text({
+          x: 8,
+          y: 56,
+          w: 84,
+          h: 12,
+          text: slide.subtitle,
+          fontSize: 26,
+          align: "center",
+          color: "#525252",
+        });
+      break;
+    case "section":
+      text({
+        x: 8,
+        y: 40,
+        w: 84,
+        h: 20,
+        text: slide.title || "Section",
+        fontSize: 40,
+        bold: true,
+      });
+      break;
+    case "image":
+      if (slide.image)
+        els.push(
+          newElement("image", { x: 12, y: 8, w: 76, h: 74, src: slide.image }),
+        );
+      if (slide.title)
+        text({
+          x: 8,
+          y: 84,
+          w: 84,
+          h: 10,
+          text: slide.title,
+          fontSize: 22,
+          align: "center",
+          color: "#525252",
+        });
+      break;
+    case "free":
+      if (slide.title)
+        text({
+          x: 8,
+          y: 8,
+          w: 84,
+          h: 14,
+          text: slide.title,
+          fontSize: 34,
+          bold: true,
+        });
+      text({
+        x: 8,
+        y: slide.title ? 24 : 10,
+        w: 84,
+        h: slide.title ? 68 : 82,
+        text: slide.body,
+        fontSize: 22,
+      });
+      break;
+    case "bullets":
+    default:
+      text({
+        x: 8,
+        y: 8,
+        w: 84,
+        h: 14,
+        text: slide.title || "Slide title",
+        fontSize: 34,
+        bold: true,
+      });
+      text({
+        x: 8,
+        y: 26,
+        w: 84,
+        h: 66,
+        text: slide.bullets
+          .filter((b) => b.trim())
+          .map((b) => `•  ${b}`)
+          .join("\n"),
+        fontSize: 22,
+      });
+      break;
+  }
+  // Deterministic ids so synthesized elements keep a stable identity across
+  // renders (selection + drag depend on it) until the slide is actually edited.
+  els.forEach((e, i) => (e.id = `${slide.id}~${i}`));
+  return els;
 }
 
 function read(): Deck[] {
@@ -71,6 +234,7 @@ function read(): Deck[] {
         ...s,
         body: s.body ?? "",
         image: s.image ?? "",
+        elements: s.elements ?? [],
       })),
     }));
   } catch {

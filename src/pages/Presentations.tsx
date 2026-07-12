@@ -5,21 +5,26 @@ import {
   Trash2,
   Play,
   Wand2,
-  ChevronUp,
-  ChevronDown,
   X,
   Square,
   Loader2,
   Check,
   Image as ImageIcon,
+  Type,
+  Bold,
+  Italic,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
 } from "lucide-react";
 import {
   type Deck,
   type DeckSummary,
   type Slide,
-  type SlideLayout,
-  LAYOUT_LABEL,
+  type SlideElement,
   newSlide,
+  newElement,
+  elementsForSlide,
   listDecks,
   getDeck,
   createDeck,
@@ -29,6 +34,8 @@ import {
 } from "@/lib/decks";
 import { generateDeck } from "@/lib/deckAssist";
 import { fileToDataUrl } from "@/lib/image";
+import SlideView from "@/components/SlideView";
+import SlideCanvas from "@/components/SlideCanvas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -38,130 +45,18 @@ import { cn } from "@/lib/utils";
 const selectClass =
   "flex h-9 rounded-md border border-border bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-// A slide rendered as a "paper" 16:9 surface — light regardless of app theme,
-// like a real slide. Fills its container; text scales with the `full` flag.
-function SlideView({ slide, full }: { slide: Slide; full: boolean }) {
-  const bullets = slide.bullets.filter((b) => b.trim());
-  return (
-    <div
-      className={cn(
-        "flex h-full w-full flex-col overflow-hidden bg-white text-neutral-900",
-        full ? "p-10" : "p-2.5",
-      )}
-    >
-      {slide.layout === "title" && (
-        <div className="flex flex-1 flex-col items-center justify-center text-center">
-          <h1 className={cn("font-bold", full ? "text-4xl" : "truncate text-[11px]")}>
-            {slide.title || "Presentation title"}
-          </h1>
-          {slide.subtitle && (
-            <p
-              className={cn(
-                "text-neutral-500",
-                full ? "mt-4 text-xl" : "mt-0.5 truncate text-[8px]",
-              )}
-            >
-              {slide.subtitle}
-            </p>
-          )}
-        </div>
-      )}
-
-      {slide.layout === "section" && (
-        <div className="flex flex-1 flex-col justify-center">
-          <div className={cn("border-l-primary", full ? "border-l-4 pl-5" : "border-l-2 pl-1.5")}>
-            <h2
-              className={cn(
-                "font-semibold",
-                full ? "text-3xl" : "truncate text-[10px]",
-              )}
-            >
-              {slide.title || "Section"}
-            </h2>
-          </div>
-        </div>
-      )}
-
-      {slide.layout === "bullets" && (
-        <div className="flex h-full flex-col">
-          <h2 className={cn("font-bold", full ? "text-3xl" : "truncate text-[10px]")}>
-            {slide.title || "Slide title"}
-          </h2>
-          <ul
-            className={cn(
-              "flex-1",
-              full ? "mt-5 space-y-3 text-xl" : "mt-1 space-y-0.5 text-[8px]",
-            )}
-          >
-            {bullets.map((b, i) => (
-              <li key={i} className="flex gap-2">
-                <span className="text-primary">•</span>
-                <span className={full ? "" : "truncate"}>{b}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {slide.layout === "free" && (
-        <div className="flex h-full flex-col">
-          {slide.title && (
-            <h2
-              className={cn(
-                "font-bold",
-                full ? "mb-4 text-3xl" : "mb-1 truncate text-[10px]",
-              )}
-            >
-              {slide.title}
-            </h2>
-          )}
-          <div
-            className={cn(
-              "flex-1 overflow-hidden whitespace-pre-wrap",
-              full ? "text-xl leading-relaxed" : "text-[8px] leading-snug",
-            )}
-          >
-            {slide.body}
-          </div>
-        </div>
-      )}
-
-      {slide.layout === "image" && (
-        <div className="flex h-full w-full flex-col items-center justify-center">
-          {slide.image ? (
-            <img
-              src={slide.image}
-              alt={slide.title || "Slide image"}
-              className="min-h-0 max-h-full max-w-full object-contain"
-            />
-          ) : (
-            <div
-              className={cn(
-                "text-neutral-400",
-                full ? "text-sm" : "text-[8px]",
-              )}
-            >
-              No image yet
-            </div>
-          )}
-          {full && slide.title && (
-            <p className="mt-3 shrink-0 text-sm text-neutral-500">
-              {slide.title}
-            </p>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// Remembers the open deck so Presentations reopens it on next launch.
+const LAST_DECK = "authorhub.presentations.lastdeck";
 
 export default function Presentations() {
   const [decks, setDecks] = useState<DeckSummary[]>([]);
   const [deck, setDeck] = useState<Deck | null>(null);
   const [sel, setSel] = useState(0);
+  const [selElId, setSelElId] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [imgError, setImgError] = useState<string | null>(null);
   const imgInputRef = useRef<HTMLInputElement | null>(null);
+  const dragIdx = useRef<number | null>(null);
 
   // Present mode
   const [present, setPresent] = useState(false);
@@ -180,16 +75,23 @@ export default function Presentations() {
   useEffect(() => {
     listDecks().then((list) => {
       setDecks(list);
-      if (list.length) open(list[0].id);
+      const last = localStorage.getItem(LAST_DECK);
+      const target = last && list.some((d) => d.id === last) ? last : list[0]?.id;
+      if (target) open(target);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Clear the element selection when moving to another slide.
+  useEffect(() => setSelElId(null), [sel]);
 
   async function open(id: string) {
     const d = await getDeck(id);
     if (d) {
       setDeck(d);
       setSel(0);
+      setSelElId(null);
+      localStorage.setItem(LAST_DECK, id);
     }
   }
 
@@ -209,6 +111,7 @@ export default function Presentations() {
     setDecks(await listDecks());
     setDeck(d);
     setSel(0);
+    localStorage.setItem(LAST_DECK, d.id);
   }
 
   async function removeDeck(id: string) {
@@ -217,11 +120,14 @@ export default function Presentations() {
     setDecks(list);
     if (deck?.id === id) {
       if (list.length) open(list[0].id);
-      else setDeck(null);
+      else {
+        setDeck(null);
+        localStorage.removeItem(LAST_DECK);
+      }
     }
   }
 
-  // --- slide edits ----------------------------------------------------------
+  // --- slide + element edits --------------------------------------------------
   function patchSlide(i: number, patch: Partial<Slide>) {
     if (!deck) return;
     const slides = deck.slides.map((s, idx) =>
@@ -230,22 +136,41 @@ export default function Presentations() {
     persist({ ...deck, slides });
   }
 
-  // Set (or replace) a slide's image. Saves immediately rather than through the
-  // debounce so a storage-quota failure from a too-large image can be caught and
-  // surfaced instead of silently dropped in a later timer.
-  async function setSlideImage(i: number, file: File) {
-    if (!deck) return;
+  // The current slide's canvas elements (synthesized from the layout the first
+  // time an older/AI slide is edited).
+  const slide = deck && deck.slides[sel] ? deck.slides[sel] : null;
+  const els = slide ? elementsForSlide(slide) : [];
+  const selEl = els.find((e) => e.id === selElId) ?? null;
+
+  function setElements(elements: SlideElement[]) {
+    patchSlide(sel, { elements });
+  }
+
+  function patchEl(id: string, p: Partial<SlideElement>) {
+    setElements(els.map((e) => (e.id === id ? { ...e, ...p } : e)));
+  }
+
+  function addText() {
+    const el = newElement("text", { text: "New text" });
+    setElements([...els, el]);
+    setSelElId(el.id);
+  }
+
+  async function addImageFromFile(file: File) {
     setImgError(null);
     try {
-      const dataUrl = await fileToDataUrl(file);
-      const slides = deck.slides.map((s, idx) =>
-        idx === i ? { ...s, image: dataUrl, layout: "image" as SlideLayout } : s,
+      const src = await fileToDataUrl(file);
+      const el = newElement("image", { src });
+      const next = [...els, el];
+      // Save immediately so a too-large image surfaces a quota error now.
+      const slides = deck!.slides.map((s, idx) =>
+        idx === sel ? { ...s, elements: next } : s,
       );
-      const next = { ...deck, slides };
-      await updateDeck(next.id, { title: next.title, slides });
-      setDeck(next);
+      await updateDeck(deck!.id, { title: deck!.title, slides });
+      setDeck({ ...deck!, slides });
       setSavedAt(Date.now());
       setDecks(await listDecks());
+      setSelElId(el.id);
     } catch (e) {
       const quota = e instanceof Error && /quota|exceeded/i.test(e.message);
       setImgError(
@@ -254,6 +179,11 @@ export default function Presentations() {
           : (e as Error).message || "Couldn't add that image.",
       );
     }
+  }
+
+  function deleteEl(id: string) {
+    setElements(els.filter((e) => e.id !== id));
+    setSelElId(null);
   }
 
   function addSlide() {
@@ -270,17 +200,17 @@ export default function Presentations() {
     setSel((s) => Math.max(0, Math.min(s, slides.length - 1)));
   }
 
-  function moveSlide(i: number, dir: -1 | 1) {
-    if (!deck) return;
-    const j = i + dir;
-    if (j < 0 || j >= deck.slides.length) return;
+  // Reorder slides by dragging thumbnails.
+  function reorder(from: number, to: number) {
+    if (!deck || from === to) return;
     const slides = [...deck.slides];
-    [slides[i], slides[j]] = [slides[j], slides[i]];
+    const [moved] = slides.splice(from, 1);
+    slides.splice(to, 0, moved);
     persist({ ...deck, slides });
-    setSel(j);
+    setSel(to);
   }
 
-  // --- AI generation --------------------------------------------------------
+  // --- AI generation ----------------------------------------------------------
   async function runGen() {
     if (!topic.trim()) return;
     setGenText("");
@@ -309,19 +239,20 @@ export default function Presentations() {
   async function useGenerated() {
     const parsed = parseOutline(genText);
     if (!parsed.length) return;
-    // Fresh/empty deck → replace; otherwise append.
     const isEmpty =
       !deck ||
       deck.slides.length === 0 ||
       (deck.slides.length === 1 &&
         !deck.slides[0].title &&
-        !deck.slides[0].bullets.length);
+        !deck.slides[0].bullets.length &&
+        !deck.slides[0].elements.length);
 
     if (!deck) {
       const d = await createDeck(topic.trim(), parsed);
       setDecks(await listDecks());
       setDeck(d);
       setSel(0);
+      localStorage.setItem(LAST_DECK, d.id);
     } else {
       const slides = isEmpty ? parsed : [...deck.slides, ...parsed];
       const title = deck.title.trim() || topic.trim();
@@ -333,7 +264,7 @@ export default function Presentations() {
     setTopic("");
   }
 
-  // --- present mode keyboard ------------------------------------------------
+  // --- present mode keyboard --------------------------------------------------
   useEffect(() => {
     if (!present || !deck) return;
     const onKey = (e: KeyboardEvent) => {
@@ -357,8 +288,8 @@ export default function Presentations() {
     setPresent(true);
   }
 
-  const slide = deck && deck.slides[sel] ? deck.slides[sel] : null;
   const genParsedCount = genText ? parseOutline(genText).length : 0;
+  const fontSize = selEl?.fontSize ?? 24;
 
   return (
     <div className="flex h-full flex-col">
@@ -440,14 +371,21 @@ export default function Presentations() {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">
-          {/* Thumbnail rail */}
+          {/* Thumbnail rail — drag to reorder */}
           <div className="w-44 shrink-0 space-y-2 overflow-y-auto border-r border-border p-2.5">
             {deck.slides.map((s, i) => (
-              <button
+              <div
                 key={s.id}
+                draggable
+                onDragStart={() => (dragIdx.current = i)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => {
+                  if (dragIdx.current !== null) reorder(dragIdx.current, i);
+                  dragIdx.current = null;
+                }}
                 onClick={() => setSel(i)}
                 className={cn(
-                  "group relative block w-full overflow-hidden rounded-md border text-left transition",
+                  "group relative block w-full cursor-pointer overflow-hidden rounded-md border transition",
                   i === sel
                     ? "border-primary ring-2 ring-primary"
                     : "border-border hover:border-primary/50",
@@ -456,10 +394,20 @@ export default function Presentations() {
                 <span className="absolute left-1 top-1 z-10 rounded bg-black/50 px-1 text-[9px] font-medium text-white">
                   {i + 1}
                 </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeSlide(i);
+                  }}
+                  title="Delete slide"
+                  className="absolute right-1 top-1 z-10 rounded bg-black/40 p-0.5 text-white opacity-0 transition group-hover:opacity-100 hover:bg-red-600"
+                >
+                  <X className="size-3" />
+                </button>
                 <div className="aspect-video">
-                  <SlideView slide={s} full={false} />
+                  <SlideView slide={s} />
                 </div>
-              </button>
+              </div>
             ))}
             <Button
               variant="outline"
@@ -482,206 +430,160 @@ export default function Presentations() {
             />
 
             {slide ? (
-              <div className="mx-auto max-w-3xl space-y-4">
-                {/* Canvas */}
-                <div className="overflow-hidden rounded-lg border border-border shadow-sm">
-                  <div className="aspect-video">
-                    <SlideView slide={slide} full />
-                  </div>
-                </div>
-
-                {/* Slide controls */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={slide.layout}
-                    onChange={(e) =>
-                      patchSlide(sel, {
-                        layout: e.target.value as SlideLayout,
-                      })
-                    }
-                    className={selectClass}
+              <div className="mx-auto max-w-4xl space-y-3">
+                {/* Insert + format toolbar */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Button variant="outline" size="sm" onClick={addText}>
+                    <Type className="size-4" />
+                    Text box
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => imgInputRef.current?.click()}
                   >
-                    {(Object.keys(LAYOUT_LABEL) as SlideLayout[]).map((l) => (
-                      <option key={l} value={l}>
-                        {LAYOUT_LABEL[l]}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="ml-auto flex items-center gap-1">
+                    <ImageIcon className="size-4" />
+                    Image
+                  </Button>
+                  <input
+                    ref={imgInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) addImageFromFile(f);
+                      e.target.value = "";
+                    }}
+                  />
+
+                  {selEl && selEl.type === "text" && (
+                    <>
+                      <span className="mx-1 h-5 w-px bg-border" />
+                      <Button
+                        variant={selEl.bold ? "default" : "outline"}
+                        size="icon"
+                        onClick={() => patchEl(selEl.id, { bold: !selEl.bold })}
+                        title="Bold"
+                      >
+                        <Bold className="size-4" />
+                      </Button>
+                      <Button
+                        variant={selEl.italic ? "default" : "outline"}
+                        size="icon"
+                        onClick={() =>
+                          patchEl(selEl.id, { italic: !selEl.italic })
+                        }
+                        title="Italic"
+                      >
+                        <Italic className="size-4" />
+                      </Button>
+                      {(["left", "center", "right"] as const).map((a) => {
+                        const Icon =
+                          a === "left"
+                            ? AlignLeft
+                            : a === "center"
+                              ? AlignCenter
+                              : AlignRight;
+                        return (
+                          <Button
+                            key={a}
+                            variant={selEl.align === a ? "default" : "outline"}
+                            size="icon"
+                            onClick={() => patchEl(selEl.id, { align: a })}
+                            title={`Align ${a}`}
+                          >
+                            <Icon className="size-4" />
+                          </Button>
+                        );
+                      })}
+                      <div className="flex items-center rounded-md border border-border">
+                        <button
+                          onClick={() =>
+                            patchEl(selEl.id, {
+                              fontSize: Math.max(8, fontSize - 2),
+                            })
+                          }
+                          className="px-2 py-1 text-sm hover:bg-accent"
+                          title="Smaller text"
+                        >
+                          A−
+                        </button>
+                        <span className="w-8 text-center text-xs text-muted-foreground">
+                          {fontSize}
+                        </span>
+                        <button
+                          onClick={() =>
+                            patchEl(selEl.id, {
+                              fontSize: Math.min(200, fontSize + 2),
+                            })
+                          }
+                          className="px-2 py-1 text-base hover:bg-accent"
+                          title="Larger text"
+                        >
+                          A+
+                        </button>
+                      </div>
+                      <input
+                        type="color"
+                        value={selEl.color ?? "#171717"}
+                        onChange={(e) =>
+                          patchEl(selEl.id, { color: e.target.value })
+                        }
+                        title="Text color"
+                        className="size-8 cursor-pointer rounded border border-border bg-background p-0.5"
+                      />
+                    </>
+                  )}
+
+                  {selEl && (
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => moveSlide(sel, -1)}
-                      disabled={sel === 0}
-                      aria-label="Move slide up"
-                    >
-                      <ChevronUp className="size-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => moveSlide(sel, 1)}
-                      disabled={sel === deck.slides.length - 1}
-                      aria-label="Move slide down"
-                    >
-                      <ChevronDown className="size-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeSlide(sel)}
-                      aria-label="Delete slide"
+                      onClick={() => deleteEl(selEl.id)}
+                      title="Delete element"
+                      className="ml-auto"
                     >
                       <Trash2 className="size-4 text-red-500" />
                     </Button>
-                  </div>
+                  )}
                 </div>
 
-                {/* Fields per layout */}
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-sm font-medium">Title</label>
-                    <Input
-                      value={slide.title}
-                      onChange={(e) => patchSlide(sel, { title: e.target.value })}
-                      className="mt-1"
+                {imgError && (
+                  <p className="text-xs text-red-600">{imgError}</p>
+                )}
+
+                {/* Canvas */}
+                <div className="overflow-hidden rounded-lg border border-border shadow-sm">
+                  <div className="aspect-video">
+                    <SlideCanvas
+                      elements={els}
+                      selectedId={selElId}
+                      onSelect={setSelElId}
+                      onChange={setElements}
                     />
                   </div>
+                </div>
+                <p className="text-center text-xs text-muted-foreground">
+                  Double-click text to edit · drag to move · drag a corner to
+                  resize · click empty space to deselect
+                </p>
 
-                  {slide.layout === "title" && (
-                    <div>
-                      <label className="text-sm font-medium">Subtitle</label>
-                      <Input
-                        value={slide.subtitle}
-                        onChange={(e) =>
-                          patchSlide(sel, { subtitle: e.target.value })
-                        }
-                        className="mt-1"
-                      />
-                    </div>
-                  )}
-
-                  {slide.layout === "bullets" && (
-                    <div>
-                      <label className="text-sm font-medium">Bullet points</label>
-                      <div className="mt-1 space-y-2">
-                        {slide.bullets.map((b, bi) => (
-                          <div key={bi} className="flex items-center gap-2">
-                            <span className="text-muted-foreground">•</span>
-                            <Input
-                              value={b}
-                              onChange={(e) => {
-                                const bullets = slide.bullets.map((x, xi) =>
-                                  xi === bi ? e.target.value : x,
-                                );
-                                patchSlide(sel, { bullets });
-                              }}
-                              placeholder="Point…"
-                            />
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() =>
-                                patchSlide(sel, {
-                                  bullets: slide.bullets.filter(
-                                    (_, xi) => xi !== bi,
-                                  ),
-                                })
-                              }
-                              aria-label="Remove bullet"
-                            >
-                              <X className="size-4" />
-                            </Button>
-                          </div>
-                        ))}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            patchSlide(sel, { bullets: [...slide.bullets, ""] })
-                          }
-                        >
-                          <Plus className="size-4" />
-                          Add point
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {slide.layout === "free" && (
-                    <div>
-                      <label className="text-sm font-medium">Slide text</label>
-                      <Textarea
-                        value={slide.body}
-                        onChange={(e) =>
-                          patchSlide(sel, { body: e.target.value })
-                        }
-                        rows={8}
-                        className="mt-1 font-mono text-sm"
-                        placeholder="Write anything you want on this slide — line breaks and spacing are kept exactly as you type them."
-                      />
-                    </div>
-                  )}
-
-                  {slide.layout === "image" && (
-                    <div>
-                      <label className="text-sm font-medium">Image</label>
-                      <div className="mt-1 flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => imgInputRef.current?.click()}
-                        >
-                          <ImageIcon className="size-4" />
-                          {slide.image ? "Replace image" : "Choose image"}
-                        </Button>
-                        {slide.image && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => patchSlide(sel, { image: "" })}
-                          >
-                            <X className="size-4" />
-                            Remove
-                          </Button>
-                        )}
-                      </div>
-                      <input
-                        ref={imgInputRef}
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) setSlideImage(sel, f);
-                          e.target.value = "";
-                        }}
-                      />
-                      {imgError && (
-                        <p className="mt-1 text-xs text-red-600">{imgError}</p>
-                      )}
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Stored on this device. The Title field above shows as a
-                        caption under the image.
-                      </p>
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="text-sm font-medium">
-                      Speaker notes{" "}
-                      <span className="font-normal text-muted-foreground">
-                        (only you see these)
-                      </span>
-                    </label>
-                    <Textarea
-                      value={slide.notes}
-                      onChange={(e) => patchSlide(sel, { notes: e.target.value })}
-                      rows={3}
-                      className="mt-1"
-                      placeholder="What to say on this slide…"
-                    />
-                  </div>
+                {/* Speaker notes */}
+                <div>
+                  <label className="text-sm font-medium">
+                    Speaker notes{" "}
+                    <span className="font-normal text-muted-foreground">
+                      (only you see these)
+                    </span>
+                  </label>
+                  <Textarea
+                    value={slide.notes}
+                    onChange={(e) => patchSlide(sel, { notes: e.target.value })}
+                    rows={3}
+                    className="mt-1"
+                    placeholder="What to say on this slide…"
+                  />
                 </div>
               </div>
             ) : (
@@ -778,11 +680,10 @@ export default function Presentations() {
         <div className="fixed inset-0 z-50 flex flex-col bg-black">
           <div className="flex flex-1 items-center justify-center p-6">
             <div className="aspect-video w-full max-w-6xl overflow-hidden rounded-lg shadow-2xl">
-              <SlideView slide={deck.slides[pIdx]} full />
+              <SlideView slide={deck.slides[pIdx]} />
             </div>
           </div>
 
-          {/* click zones for prev/next */}
           <button
             className="absolute inset-y-0 left-0 w-1/3 cursor-w-resize"
             onClick={() => setPIdx((i) => Math.max(i - 1, 0))}
@@ -800,9 +701,7 @@ export default function Presentations() {
             <span>
               {pIdx + 1} / {deck.slides.length}
             </span>
-            <span className="text-white/40">
-              ← → to move · Esc to exit
-            </span>
+            <span className="text-white/40">← → to move · Esc to exit</span>
             <button
               onClick={() => setPresent(false)}
               className="flex items-center gap-1 rounded px-2 py-1 hover:bg-white/10"

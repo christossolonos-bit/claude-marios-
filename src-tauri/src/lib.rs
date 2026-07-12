@@ -1,5 +1,8 @@
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::{json, Value};
+use std::fs;
+use std::path::PathBuf;
+use tauri::Manager;
 
 // Ollama's local API is reached from Rust (not the webview) so there is no web
 // origin for Ollama's CORS to reject, and no browser proxy in the way. We build
@@ -70,6 +73,41 @@ async fn fish_tts(api_key: String, voice_id: String, text: String) -> Result<Str
     Ok(general_purpose::STANDARD.encode(&bytes))
 }
 
+// The single JSON file that holds all of the user's projects and settings,
+// kept in Documents/AuthorHub so it survives reinstalls and can be copied to
+// another machine. Everything the app stores in localStorage is mirrored here.
+fn store_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let docs = app
+        .path()
+        .document_dir()
+        .map_err(|e| format!("Couldn't find the Documents folder: {e}"))?;
+    let dir = docs.join("AuthorHub");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("authorhub-data.json"))
+}
+
+// Read the saved data file. Returns an empty string when it doesn't exist yet
+// (first run) so the frontend just starts fresh.
+#[tauri::command]
+fn load_store(app: tauri::AppHandle) -> Result<String, String> {
+    let path = store_path(&app)?;
+    match fs::read_to_string(&path) {
+        Ok(contents) => Ok(contents),
+        Err(_) => Ok(String::new()),
+    }
+}
+
+// Write the whole store atomically (write to a temp file, then rename) so a
+// crash mid-write can't corrupt the user's projects.
+#[tauri::command]
+fn save_store(app: tauri::AppHandle, data: String) -> Result<(), String> {
+    let path = store_path(&app)?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, data).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -78,7 +116,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ollama_models,
             ollama_chat,
-            fish_tts
+            fish_tts,
+            load_store,
+            save_store
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
