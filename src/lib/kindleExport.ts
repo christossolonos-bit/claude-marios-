@@ -20,6 +20,127 @@ export const TRIM_SIZES: TrimSize[] = [
   { id: "8.5x11", label: '8.5" × 11" — large', width: 8.5, height: 11 },
 ];
 
+/** Resolve sizes like "5x8", "5*8", "5 × 8", or a TRIM_SIZES id. */
+export function resolveTrim(input: string): TrimSize | null {
+  const raw = input.trim().toLowerCase();
+  if (!raw) return null;
+  const byId = TRIM_SIZES.find((t) => t.id === raw);
+  if (byId) return byId;
+
+  const normalized = raw
+    .replace(/["'″′]/g, "")
+    .replace(/\s+/g, "")
+    .replace(/[×*✕]/g, "x")
+    .replace(/inches?|in\.?/g, "");
+
+  const exact = TRIM_SIZES.find((t) => t.id === normalized);
+  if (exact) return exact;
+
+  const m = normalized.match(/^(\d+(?:\.\d+)?)x(\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const w = Number(m[1]);
+  const h = Number(m[2]);
+  return (
+    TRIM_SIZES.find(
+      (t) => Math.abs(t.width - w) < 0.02 && Math.abs(t.height - h) < 0.02,
+    ) ?? null
+  );
+}
+
+export function getTrimById(id: string | undefined | null): TrimSize {
+  return TRIM_SIZES.find((t) => t.id === id) ?? TRIM_SIZES[0];
+}
+
+/** Print-area metrics used to size paragraphs for a trim. */
+export function trimParagraphMetrics(trim: TrimSize) {
+  const margin = 0.75; // same as export margins
+  const textW = Math.max(2, trim.width - 2 * margin);
+  const textH = Math.max(3, trim.height - 2 * margin);
+  // ~11pt body with ~1.45 leading ≈ 0.22" per line; ~10 chars per inch of width.
+  const charsPerLine = Math.max(28, Math.round(textW * 10));
+  const linesPerPage = Math.max(14, Math.round(textH / 0.22));
+  const wordsPerPage = Math.round((charsPerLine * linesPerPage) / 5);
+  // Aim for a few readable paragraphs per printed page.
+  const wordsPerParagraph = Math.max(40, Math.round(wordsPerPage / 4));
+  return { charsPerLine, linesPerPage, wordsPerPage, wordsPerParagraph };
+}
+
+function isHeadingBlock(p: string): boolean {
+  return isHeading(p);
+}
+
+/**
+ * Reflow one page's text into paragraph lengths suited to the trim — keep
+ * chapter headings intact, split walls of text at sentence boundaries.
+ */
+export function formatPageForTrim(text: string, trim: TrimSize): string {
+  const { wordsPerParagraph } = trimParagraphMetrics(trim);
+  const target = wordsPerParagraph;
+  const softMax = Math.round(target * 1.45);
+
+  const blocks = text
+    .replace(/\r/g, "")
+    .split(/\n\s*\n/)
+    .map((b) => b.trim())
+    .filter(Boolean);
+
+  const out: string[] = [];
+
+  for (const block of blocks) {
+    const flat = block.replace(/\s*\n\s*/g, " ").replace(/[ \t]{2,}/g, " ").trim();
+    if (!flat) continue;
+    if (isHeadingBlock(flat)) {
+      out.push(flat);
+      continue;
+    }
+
+    const words = flat.split(/\s+/).filter(Boolean);
+    if (words.length <= softMax) {
+      out.push(flat);
+      continue;
+    }
+
+    // Split long blocks into ~target-word paragraphs at sentence ends.
+    const sentences = flat.match(/[^.!?…]+(?:[.!?…]+["”']?|$)/g) ?? [flat];
+    let buf: string[] = [];
+    let count = 0;
+    const flush = () => {
+      if (!buf.length) return;
+      out.push(buf.join(" ").replace(/\s+/g, " ").trim());
+      buf = [];
+      count = 0;
+    };
+    for (const raw of sentences) {
+      const s = raw.trim();
+      if (!s) continue;
+      const n = s.split(/\s+/).filter(Boolean).length;
+      if (count > 0 && count + n > softMax) flush();
+      buf.push(s);
+      count += n;
+      if (count >= target) flush();
+    }
+    flush();
+  }
+
+  return out.join("\n\n");
+}
+
+/** Reflow every page (or a single page) for the given trim. */
+export function formatPagesForTrim(
+  pages: string[],
+  trim: TrimSize,
+  pageIndex?: number,
+): string[] {
+  if (pageIndex != null) {
+    const copy = pages.slice();
+    if (pageIndex >= 0 && pageIndex < copy.length) {
+      copy[pageIndex] = formatPageForTrim(copy[pageIndex], trim);
+    }
+    return copy;
+  }
+  return pages.map((p) => formatPageForTrim(p, trim));
+}
+
 interface Block {
   heading: boolean;
   text: string;

@@ -6,6 +6,8 @@
 export interface Manuscript {
   title: string;
   pages: string[]; // cleaned text, one entry per PDF page
+  /** KDP trim id from TRIM_SIZES (e.g. "5x8", "6x9"). */
+  trimId?: string;
   createdAt: number;
   updatedAt: number;
 }

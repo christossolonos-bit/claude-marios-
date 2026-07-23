@@ -24,7 +24,7 @@ import {
   extractDocx,
 } from "@/lib/manuscript";
 import { proofreadText } from "@/lib/proofread";
-import { TRIM_SIZES, exportDocx, saveBlob } from "@/lib/kindleExport";
+import { TRIM_SIZES, exportDocx, saveBlob, getTrimById } from "@/lib/kindleExport";
 import { ping } from "@/lib/ollama";
 import { Button } from "@/components/ui/button";
 import MicButton from "@/components/MicButton";
@@ -51,7 +51,9 @@ export default function Book() {
   const [allRunning, setAllRunning] = useState(false);
   const [allIdx, setAllIdx] = useState(0);
   const [liveProof, setLiveProof] = useState(false);
-  const [trimId, setTrimId] = useState("6x9");
+  const [trimId, setTrimId] = useState(
+    () => getManuscript()?.trimId ?? "6x9",
+  );
   const [exporting, setExporting] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
 
@@ -78,12 +80,20 @@ export default function Book() {
   function persist(m: Manuscript, immediate = false) {
     setManuscript(m);
     manuscriptRef.current = m;
+    if (m.trimId) setTrimId(m.trimId);
     if (immediate) {
       saveManuscript(m);
       return;
     }
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => saveManuscript(m), 500);
+  }
+
+  function setTrim(id: string) {
+    setTrimId(id);
+    const m = manuscriptRef.current;
+    if (!m) return;
+    persist({ ...m, trimId: id, updatedAt: Date.now() }, true);
   }
 
   // Read one or more book files (PDF or Word .docx) into a single manuscript.
@@ -115,6 +125,7 @@ export default function Book() {
         {
           title: valid[0].name.replace(/\.(pdf|docx)$/i, ""),
           pages: allPages.length ? allPages : [""],
+          trimId,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         },
@@ -148,6 +159,7 @@ export default function Book() {
       {
         title: "Untitled",
         pages: ["Chapter One\n\n"],
+        trimId,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       },
@@ -330,7 +342,7 @@ export default function Book() {
     setError(null);
     setSavedPath(null);
     try {
-      const trim = TRIM_SIZES.find((t) => t.id === trimId) ?? TRIM_SIZES[0];
+      const trim = getTrimById(trimId);
       const blob = await exportDocx({
         title: manuscript.title,
         pages: manuscript.pages,
@@ -357,7 +369,7 @@ export default function Book() {
 
   // On-screen page dimensions reflect the selected KDP trim (at 96px/inch) so
   // the pages visibly resize when you change the size.
-  const trim = TRIM_SIZES.find((t) => t.id === trimId) ?? TRIM_SIZES[0];
+  const trim = getTrimById(trimId);
   const pageW = Math.round(trim.width * 96);
   const pageMinH = Math.round(trim.height * 96);
 
@@ -507,7 +519,7 @@ export default function Book() {
             </span>
             <select
               value={trimId}
-              onChange={(e) => setTrimId(e.target.value)}
+              onChange={(e) => setTrim(e.target.value)}
               className="h-8 rounded-md border border-border bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {TRIM_SIZES.map((t) => (
@@ -661,6 +673,7 @@ export default function Book() {
               const next = getManuscript();
               setManuscript(next);
               manuscriptRef.current = next;
+              if (next?.trimId) setTrimId(next.trimId);
               setProof({});
               setApplied(new Set());
             }}
