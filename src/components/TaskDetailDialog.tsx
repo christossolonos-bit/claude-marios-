@@ -99,7 +99,7 @@ export default function TaskDetailDialog({
           <Button
             variant="ghost"
             onClick={() => onDelete(task.id)}
-            className="text-red-600 hover:bg-red-50 hover:text-red-700"
+            className="text-red-400 hover:bg-red-950/40 hover:text-red-300"
           >
             <Trash2 className="size-4" />
             Delete

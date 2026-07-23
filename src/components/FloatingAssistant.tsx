@@ -432,7 +432,7 @@ export default function FloatingAssistant({
         ))}
 
         {error && (
-          <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <div className="flex items-center gap-2 rounded-md border border-red-800/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
             <AlertCircle className="size-4 shrink-0" />
             {error}
           </div>

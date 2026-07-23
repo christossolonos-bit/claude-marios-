@@ -396,7 +396,7 @@ export default function Book() {
       </p>
 
       {error && (
-        <div className="mb-4 flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="earth-alert mb-4 flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
           <AlertCircle className="size-4 shrink-0" />
           {error}
         </div>
@@ -507,7 +507,7 @@ export default function Book() {
               variant="outline"
               size="sm"
               onClick={remove}
-              className="text-red-600 hover:bg-red-50"
+              className="text-red-400 hover:bg-red-950/40"
             >
               <Trash2 className="size-4" />
               Remove
