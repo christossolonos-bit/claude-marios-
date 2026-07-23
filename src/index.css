@@ -139,3 +139,86 @@ body {
   color: var(--muted-foreground);
   margin: 0.5em 0;
 }
+
+/* Book tab — walnut desk + paper pages */
+.book-desk {
+  --background: hsl(28 32% 18%);
+  --foreground: hsl(36 38% 92%);
+  --card: hsl(32 28% 24%);
+  --card-foreground: hsl(36 38% 92%);
+  --primary: hsl(28 48% 38%);
+  --primary-foreground: hsl(40 50% 96%);
+  --secondary: hsl(30 22% 28%);
+  --secondary-foreground: hsl(36 35% 90%);
+  --muted: hsl(30 18% 26%);
+  --muted-foreground: hsl(33 22% 68%);
+  --accent: hsl(32 26% 32%);
+  --accent-foreground: hsl(36 40% 94%);
+  --border: hsl(30 22% 34%);
+  --ring: hsl(32 42% 48%);
+  --book-paper: #f3ebdc;
+  --book-paper-edge: #e4d5bc;
+  --book-ink: #2a1c12;
+
+  min-height: 100%;
+  color: var(--foreground);
+  background-color: #2c1810;
+  background-image:
+    radial-gradient(
+      ellipse 120% 80% at 50% -10%,
+      rgba(120, 78, 42, 0.45),
+      transparent 55%
+    ),
+    repeating-linear-gradient(
+      92deg,
+      rgba(255, 220, 170, 0.035) 0px,
+      rgba(255, 220, 170, 0.035) 1px,
+      transparent 1px,
+      transparent 4px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.06) 0px,
+      transparent 2px,
+      transparent 7px
+    ),
+    linear-gradient(
+      165deg,
+      #5a3a22 0%,
+      #3d2516 38%,
+      #24140c 78%,
+      #1a0e08 100%
+    );
+}
+
+.book-desk .book-page-sheet {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.35), transparent 28%),
+    var(--book-paper);
+  color: var(--book-ink);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.35) inset,
+    0 12px 28px rgba(0, 0, 0, 0.35),
+    0 2px 6px rgba(0, 0, 0, 0.25);
+  ring-color: var(--book-paper-edge);
+}
+
+.book-desk .book-page-sheet::placeholder {
+  color: #9a8770;
+}
+
+.book-desk .book-toolbar {
+  background: rgba(28, 16, 10, 0.45);
+  border-color: rgba(210, 170, 120, 0.22);
+  backdrop-filter: blur(6px);
+}
+
+.book-desk .book-dropzone {
+  background: rgba(28, 16, 10, 0.35);
+  border-color: rgba(210, 170, 120, 0.35);
+}
+
+.book-desk .book-dropzone-active {
+  background: rgba(90, 58, 32, 0.55);
+  border-color: hsl(32 42% 55%);
+}

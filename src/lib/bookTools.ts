@@ -16,8 +16,32 @@ import {
   formatPagesForTrim,
   trimParagraphMetrics,
 } from "@/lib/kindleExport";
+import {
+  mergePageRange,
+  renumberChapters,
+  runEditorialPass,
+  splitAtHeadings,
+} from "@/lib/bookEditor";
 
 export const BOOK_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "start_blank_book",
+      description:
+        "Create a new blank book manuscript if none is open. Call this before writing when he wants to start from dictation or discussion.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Optional book title" },
+          size: {
+            type: "string",
+            description: 'Optional trim like "5x8" or "6x9"',
+          },
+        },
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -35,9 +59,36 @@ export const BOOK_TOOLS = [
   {
     type: "function",
     function: {
+      name: "editorial_pass",
+      description:
+        "Full book-editor pass: split mixed chapters apart, reflow paragraphs, paginate so each page fits the trim (overflow → next page), and renumber Chapter headings. Use when he asks to fix, clean up, or properly format the book after dictating or discussing — or when he names a trim size and wants the manuscript fixed for it.",
+      parameters: {
+        type: "object",
+        properties: {
+          size: {
+            type: "string",
+            description: 'Optional trim like "5x8". Defaults to current trim.',
+          },
+          renumber: {
+            type: "boolean",
+            description: "Renumber chapters in order (default true).",
+          },
+          style: {
+            type: "string",
+            enum: ["words", "digits"],
+            description:
+              'Chapter style: "Chapter One" (words) or "Chapter 1" (digits). Default words.',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "set_trim_size",
       description:
-        'Set the book\'s print/trim size (KDP page size) and resize the on-screen pages. Accepts sizes like "5x8", "5*8", "6x9", "5.5x8.5", "8.5x11". Call this when he names a book size.',
+        'Set the book\'s print/trim size (KDP page size) and resize the on-screen pages. Accepts sizes like "5x8", "5*8", "6x9", "5.5x8.5", "8.5x11". By default also reflows paragraphs and splits overflow onto the next page so each page fits the trim. Prefer editorial_pass when he also wants chapters fixed/renumbered.',
       parameters: {
         type: "object",
         properties: {
@@ -48,7 +99,7 @@ export const BOOK_TOOLS = [
           format_paragraphs: {
             type: "boolean",
             description:
-              "If true (default), also reflow paragraph lengths to fit this trim.",
+              "If true (default), reflow paragraphs and paginate so no page is longer than this trim — overflow continues on the next page.",
           },
         },
         required: ["size"],
@@ -60,7 +111,7 @@ export const BOOK_TOOLS = [
     function: {
       name: "format_paragraphs_for_trim",
       description:
-        "Reflow paragraph lengths so they fit the current (or given) trim size — shorter paragraphs for smaller books like 5x8, longer for larger. Keeps chapter headings. Use when he asks to fix paragraph size for the book size.",
+        "Reflow paragraph lengths for the current (or given) trim, then split pages so each one fits that print size. Extra words move to the next page. Chapter/part headings start a new page.",
       parameters: {
         type: "object",
         properties: {
@@ -72,9 +123,55 @@ export const BOOK_TOOLS = [
           page: {
             type: "integer",
             description:
-              "Optional 1-based page to format. Omit to format the whole book.",
+              "Optional 1-based page to paginate. Omit to format and paginate the whole book.",
           },
         },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "split_at_headings",
+      description:
+        "Split pages wherever Chapter/Part/Prologue headings appear mid-page, so each section starts cleanly. Often followed by editorial_pass or format_paragraphs_for_trim.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "renumber_chapters",
+      description:
+        'Renumber chapter headings in reading order as "Chapter One", "Chapter Two", … (or Chapter 1, 2, …). Leaves Part/Prologue headings alone.',
+      parameters: {
+        type: "object",
+        properties: {
+          style: {
+            type: "string",
+            enum: ["words", "digits"],
+            description: 'Default "words" → Chapter One; "digits" → Chapter 1.',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "merge_pages",
+      description:
+        "Merge an inclusive range of pages into one page (e.g. after a bad split). Use 1-based page numbers.",
+      parameters: {
+        type: "object",
+        properties: {
+          from_page: { type: "integer" },
+          to_page: { type: "integer" },
+        },
+        required: ["from_page", "to_page"],
       },
     },
   },
@@ -98,7 +195,7 @@ export const BOOK_TOOLS = [
     function: {
       name: "write_page",
       description:
-        "Replace the full text of one page (1-based). Prefer this when rewriting a single chapter.",
+        "Replace the full text of one page (1-based). Prefer this when rewriting a single chapter or page.",
       parameters: {
         type: "object",
         properties: {
@@ -106,7 +203,7 @@ export const BOOK_TOOLS = [
           content: {
             type: "string",
             description:
-              "Full page text. Start with a clear heading (e.g. Chapter One) when it is a chapter.",
+              "Full page text. Start with a clear heading (e.g. Chapter One) when it begins a chapter.",
           },
         },
         required: ["page", "content"],
@@ -117,7 +214,8 @@ export const BOOK_TOOLS = [
     type: "function",
     function: {
       name: "append_page",
-      description: "Append text to the end of an existing page (1-based).",
+      description:
+        "Append text to the end of an existing page (1-based). Good for adding dictated prose onto a chapter before an editorial_pass.",
       parameters: {
         type: "object",
         properties: {
@@ -133,14 +231,14 @@ export const BOOK_TOOLS = [
     function: {
       name: "add_page",
       description:
-        "Add a new page at the end of the book. Use for a new chapter or part.",
+        "Add a new page at the end of the book. Use for a new chapter or continued text.",
       parameters: {
         type: "object",
         properties: {
           content: {
             type: "string",
             description:
-              "Full page text. Start with a heading like Chapter Two or Part I.",
+              "Full page text. Start with a heading like Chapter Two or Part I when appropriate.",
           },
         },
         required: ["content"],
@@ -185,7 +283,7 @@ export const BOOK_TOOLS = [
     function: {
       name: "move_page",
       description:
-        "Move a page to a new position (both 1-based). Use to reorder chapters.",
+        "Move a page to a new position (both 1-based). Use to reorder chapters or pages.",
       parameters: {
         type: "object",
         properties: {
@@ -201,7 +299,7 @@ export const BOOK_TOOLS = [
     function: {
       name: "replace_structure",
       description:
-        "Replace the entire book structure with a new ordered list of pages. Use when organizing a story into proper chapters/parts from what he described. Each item should be one chapter (or part opener), starting with a clear heading.",
+        "Replace the entire book with a new ordered list of pages/chapters. Primary tool after he dictates or explains the story: turn his words into proper Chapter/Part pages (each item starts with a heading), then usually follow with editorial_pass so pages fit the trim.",
       parameters: {
         type: "object",
         properties: {
@@ -214,6 +312,15 @@ export const BOOK_TOOLS = [
           title: {
             type: "string",
             description: "Optional new book title",
+          },
+          editorial_pass: {
+            type: "boolean",
+            description:
+              "If true (default), run a full editorial pass afterward (paginate to trim, renumber chapters).",
+          },
+          size: {
+            type: "string",
+            description: 'Optional trim for the follow-up pass, e.g. "5x8".',
           },
         },
         required: ["pages"],
@@ -276,12 +383,56 @@ export async function executeBookTool(
   args: Record<string, unknown>,
 ): Promise<ToolResult> {
   switch (name) {
+    case "start_blank_book": {
+      if (requireManuscript()) {
+        return { summary: "A book is already open — use it, or clear it from the Book tab first." };
+      }
+      const title = str(args.title).trim() || "Untitled";
+      const trim = resolveTrim(str(args.size)) ?? getTrimById("6x9");
+      const m: Manuscript = {
+        title,
+        pages: ["Chapter One\n\n"],
+        trimId: trim.id,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      persist(m);
+      return {
+        summary: `Started blank book "${title}" at ${trim.label}`,
+      };
+    }
+
     case "set_book_title": {
       const m = requireManuscript();
       if (!m) return { summary: "No book open yet — start a blank book first." };
       const title = str(args.title).trim() || "Untitled";
       persist({ ...m, title });
       return { summary: `Book title set to "${title}"` };
+    }
+
+    case "editorial_pass": {
+      const m = requireManuscript();
+      if (!m) return { summary: "No book open yet — start a blank book first." };
+      const style =
+        str(args.style) === "digits" ? "digits" : "words";
+      const result = runEditorialPass(m.pages, {
+        size: str(args.size).trim() || undefined,
+        currentTrimId: m.trimId,
+        renumber: args.renumber !== false,
+        renumberStyle: style,
+      });
+      persist({
+        ...m,
+        pages: result.pages,
+        trimId: result.trimId,
+      });
+      return {
+        summary: `Editorial pass for ${result.trim.label}: ${result.pageCountBefore} → ${result.pageCountAfter} pages${
+          result.chaptersRenumbered
+            ? `, ${result.chaptersRenumbered} chapters renumbered`
+            : ""
+        }`,
+      };
     }
 
     case "set_trim_size": {
@@ -294,6 +445,7 @@ export async function executeBookTool(
         };
       }
       const alsoFormat = args.format_paragraphs !== false;
+      const before = m.pages.length;
       const pages = alsoFormat
         ? formatPagesForTrim(m.pages, trim)
         : m.pages;
@@ -301,7 +453,7 @@ export async function executeBookTool(
       const metrics = trimParagraphMetrics(trim);
       return {
         summary: alsoFormat
-          ? `Set trim to ${trim.label} and reflowed paragraphs (~${metrics.wordsPerParagraph} words each, ~${metrics.wordsPerPage} words/page)`
+          ? `Set trim to ${trim.label}, reflowed paragraphs, and paginated to fit (~${metrics.wordsPerPage} words/page): ${before} → ${pages.length} pages`
           : `Set trim to ${trim.label}`,
       };
     }
@@ -317,6 +469,7 @@ export async function executeBookTool(
         };
       }
       const page = int(args.page);
+      const before = m.pages.length;
       let pages: string[];
       if (page != null) {
         const i = pageIndex(page, m.pages.length);
@@ -333,8 +486,51 @@ export async function executeBookTool(
       return {
         summary:
           page != null
-            ? `Formatted page ${page} for ${trim.label} (~${metrics.wordsPerParagraph} words/paragraph)`
-            : `Formatted all pages for ${trim.label} (~${metrics.wordsPerParagraph} words/paragraph, ~${metrics.wordsPerPage} words/page)`,
+            ? `Paginated page ${page} for ${trim.label} (~${metrics.wordsPerPage} words/page): book now ${pages.length} pages`
+            : `Formatted and paginated for ${trim.label} (~${metrics.wordsPerParagraph} words/paragraph, ~${metrics.wordsPerPage} words/page): ${before} → ${pages.length} pages`,
+      };
+    }
+
+    case "split_at_headings": {
+      const m = requireManuscript();
+      if (!m) return { summary: "No book open yet." };
+      const before = m.pages.length;
+      const pages = splitAtHeadings(m.pages);
+      persist({ ...m, pages });
+      return {
+        summary: `Split at chapter/part headings: ${before} → ${pages.length} pages`,
+      };
+    }
+
+    case "renumber_chapters": {
+      const m = requireManuscript();
+      if (!m) return { summary: "No book open yet." };
+      const style = str(args.style) === "digits" ? "digits" : "words";
+      const { pages, count } = renumberChapters(m.pages, style);
+      persist({ ...m, pages });
+      return {
+        summary:
+          count > 0
+            ? `Renumbered ${count} chapters (${style === "digits" ? "Chapter 1…" : "Chapter One…"})`
+            : "No chapter headings found to renumber.",
+      };
+    }
+
+    case "merge_pages": {
+      const m = requireManuscript();
+      if (!m) return { summary: "No book open yet." };
+      const from = int(args.from_page);
+      const to = int(args.to_page);
+      if (from == null || to == null)
+        return { summary: "Need from_page and to_page (1-based)." };
+      if (from < 1 || to < from || to > m.pages.length)
+        return {
+          summary: `Invalid range ${from}–${to} (book has ${m.pages.length} pages).`,
+        };
+      const pages = mergePageRange(m.pages, from - 1, to - 1);
+      persist({ ...m, pages });
+      return {
+        summary: `Merged pages ${from}–${to} into page ${from} (${pages.length} pages total)`,
       };
     }
 
@@ -475,27 +671,54 @@ export async function executeBookTool(
     }
 
     case "replace_structure": {
-      const m = requireManuscript();
-      if (!m) return { summary: "No book open yet." };
+      let m = requireManuscript();
+      if (!m) {
+        const title = str(args.title).trim() || "Untitled";
+        const trim = resolveTrim(str(args.size)) ?? getTrimById("6x9");
+        m = {
+          title,
+          pages: [""],
+          trimId: trim.id,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+      }
       const raw = args.pages;
       if (!Array.isArray(raw) || !raw.length)
         return { summary: "Need a non-empty pages array." };
-      const pages = raw.map((p) => str(p));
+      let pages = raw.map((p) => str(p));
       const title = str(args.title).trim();
-      persist({
-        ...m,
-        pages,
-        ...(title ? { title } : {}),
-      });
+      const doPass = args.editorial_pass !== false;
+      let passNote = "";
+      if (doPass) {
+        const result = runEditorialPass(pages, {
+          size: str(args.size).trim() || undefined,
+          currentTrimId: m.trimId,
+        });
+        pages = result.pages;
+        persist({
+          ...m,
+          pages,
+          trimId: result.trimId,
+          ...(title ? { title } : {}),
+        });
+        passNote = ` · editorial pass → ${result.pageCountAfter} pages (${result.trim.label})`;
+      } else {
+        persist({
+          ...m,
+          pages,
+          ...(title ? { title } : {}),
+        });
+      }
       const preview = pages
         .slice(0, 8)
         .map((p, i) => `${i + 1}. ${headingOf(p, `Page ${i + 1}`)}`)
         .join("; ");
       const more = pages.length > 8 ? ` (+${pages.length - 8} more)` : "";
       return {
-        summary: `Restructured book into ${pages.length} pages${
+        summary: `Restructured book${
           title ? ` · titled "${title}"` : ""
-        }: ${preview}${more}`,
+        }${passNote}: ${preview}${more}`,
       };
     }
 

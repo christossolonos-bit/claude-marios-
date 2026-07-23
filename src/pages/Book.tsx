@@ -367,6 +367,15 @@ export default function Book() {
     : 0;
   const proofDisabled = anyBusy || online === false;
 
+  function refreshFromStore() {
+    const next = getManuscript();
+    setManuscript(next);
+    manuscriptRef.current = next;
+    if (next?.trimId) setTrimId(next.trimId);
+    setProof({});
+    setApplied(new Set());
+  }
+
   // On-screen page dimensions reflect the selected KDP trim (at 96px/inch) so
   // the pages visibly resize when you change the size.
   const trim = getTrimById(trimId);
@@ -374,15 +383,16 @@ export default function Book() {
   const pageMinH = Math.round(trim.height * 96);
 
   return (
-    <div className="mx-auto flex h-full max-w-4xl flex-col p-8">
+    <div className="book-desk">
+      <div className="mx-auto flex h-full max-w-4xl flex-col p-8">
       <div className="mb-1 flex items-center gap-3">
         <BookText className="size-7 text-primary" />
         <h1 className="text-2xl font-semibold tracking-tight">Book</h1>
       </div>
       <p className="mb-6 text-muted-foreground">
-        Write or upload your book. Talk with the book assistant to turn your
-        story into chapters and pages — then edit or proofread anything you
-        like. Everything stays on this machine.
+        Your book editor. Dictate or talk with the assistant to shape chapters,
+        pages, and trim size — then tweak or proofread anything by hand.
+        Everything stays on this machine.
       </p>
 
       {error && (
@@ -410,17 +420,17 @@ export default function Book() {
           }}
           onDragLeave={() => setDragOver(false)}
           onDrop={onDrop}
-          className={`flex flex-1 flex-col items-center justify-center rounded-xl border-2 border-dashed p-8 text-center transition-colors ${
-            dragOver ? "border-primary bg-accent" : "border-border"
+          className={`book-dropzone flex flex-1 flex-col items-center justify-center rounded-xl border-2 border-dashed p-8 text-center transition-colors ${
+            dragOver ? "book-dropzone-active" : ""
           }`}
         >
           <Upload className="mb-3 size-8 text-muted-foreground" />
           <p className="mb-1 text-sm font-medium">
-            Drop your book here — PDF or Word (.docx) — or start from scratch
+            Drop a PDF or Word book — or start blank and dictate to the editor
           </p>
           <p className="mb-4 text-xs text-muted-foreground">
-            Files are read locally. You can select several Word files at once
-            (one per chapter); or begin a blank book and type your chapters.
+            Files stay on this machine. Open the book editor (bubble) to talk
+            through chapters and page layout, or begin a blank book and type.
           </p>
           <div className="flex items-center gap-2">
             <Button onClick={() => fileRef.current?.click()}>
@@ -511,7 +521,7 @@ export default function Book() {
             />
           </div>
 
-          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
+          <div className="book-toolbar mb-4 flex flex-wrap items-center gap-2 rounded-md border px-3 py-2">
             <Download className="size-4 shrink-0 text-primary" />
             <span className="text-sm font-medium">Export for Kindle</span>
             <span className="text-xs text-muted-foreground">
@@ -520,7 +530,7 @@ export default function Book() {
             <select
               value={trimId}
               onChange={(e) => setTrim(e.target.value)}
-              className="h-8 rounded-md border border-border bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="h-8 rounded-md border border-border bg-card px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {TRIM_SIZES.map((t) => (
                 <option key={t.id} value={t.id}>
@@ -599,7 +609,7 @@ export default function Book() {
                     onChange={(e) => updatePage(i, e.target.value)}
                     placeholder="Write this chapter…"
                     style={{ minHeight: pageMinH }}
-                    className="block w-full resize-none rounded-sm bg-white px-16 py-16 font-serif text-[15px] leading-7 text-zinc-900 shadow-sm ring-1 ring-black/5 [field-sizing:content] placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    className="book-page-sheet block w-full resize-none rounded-sm px-16 py-16 font-serif text-[15px] leading-7 [field-sizing:content] focus:outline-none focus:ring-2 focus:ring-primary/50"
                   />
 
                   {pr && (
@@ -668,18 +678,14 @@ export default function Book() {
             </div>
           </div>
 
-          <BookAssistant
-            onChanged={() => {
-              const next = getManuscript();
-              setManuscript(next);
-              manuscriptRef.current = next;
-              if (next?.trimId) setTrimId(next.trimId);
-              setProof({});
-              setApplied(new Set());
-            }}
-          />
+          <BookAssistant onChanged={refreshFromStore} />
         </div>
       )}
+
+      {!busy && !manuscript && (
+        <BookAssistant onChanged={refreshFromStore} />
+      )}
+      </div>
     </div>
   );
 }
