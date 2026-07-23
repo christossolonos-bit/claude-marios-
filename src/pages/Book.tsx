@@ -28,6 +28,7 @@ import { TRIM_SIZES, exportDocx, saveBlob } from "@/lib/kindleExport";
 import { ping } from "@/lib/ollama";
 import { Button } from "@/components/ui/button";
 import MicButton from "@/components/MicButton";
+import BookAssistant from "@/components/BookAssistant";
 
 interface Proof {
   status: "proofing" | "review" | "error";
@@ -367,9 +368,9 @@ export default function Book() {
         <h1 className="text-2xl font-semibold tracking-tight">Book</h1>
       </div>
       <p className="mb-6 text-muted-foreground">
-        Write or upload your book. Edit any chapter directly — turn on Live
-        proofread and the assistant checks it as you type. Everything stays on
-        this machine.
+        Write or upload your book. Talk with the book assistant to turn your
+        story into chapters and pages — then edit or proofread anything you
+        like. Everything stays on this machine.
       </p>
 
       {error && (
@@ -654,6 +655,16 @@ export default function Book() {
               </Button>
             </div>
           </div>
+
+          <BookAssistant
+            onChanged={() => {
+              const next = getManuscript();
+              setManuscript(next);
+              manuscriptRef.current = next;
+              setProof({});
+              setApplied(new Set());
+            }}
+          />
         </div>
       )}
     </div>

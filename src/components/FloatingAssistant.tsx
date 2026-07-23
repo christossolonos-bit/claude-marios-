@@ -8,6 +8,10 @@ import {
   Bot,
   RefreshCw,
   AlertCircle,
+  Mic,
+  Loader2,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -19,6 +23,9 @@ import {
   type ChatMessage,
 } from "@/lib/ollama";
 import { getSettings } from "@/lib/settings";
+import { speak, stopSpeaking, ttsSupported } from "@/lib/tts";
+import { transcribe } from "@/lib/whisper";
+import { AudioRecorder, isRecordingSupported } from "@/lib/recorder";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -82,6 +89,11 @@ export interface FloatingAssistantProps {
   ) => Promise<{ summary: string; content?: string }>;
   /** Called after a tool changes data (tool mode only). */
   onAction?: () => void;
+  /**
+   * Enable voice chat: mic → Whisper into the composer, plus optional spoken
+   * replies (same TTS pipeline as the main Assistant).
+   */
+  voiceChat?: boolean;
 }
 
 /**
@@ -100,6 +112,7 @@ export default function FloatingAssistant({
   tools,
   executeTool,
   onAction,
+  voiceChat = false,
 }: FloatingAssistantProps) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Msg[]>(() => load(storageKey));
@@ -107,10 +120,17 @@ export default function FloatingAssistant({
   const [busy, setBusy] = useState(false);
   const [online, setOnline] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [voiceOn, setVoiceOn] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const recorderRef = useRef<AudioRecorder | null>(null);
+  const voiceOnRef = useRef(false);
 
   const toolMode = !!(tools && executeTool);
+  const voiceInput = voiceChat && isRecordingSupported();
+  const voiceOut = voiceChat && ttsSupported();
 
   // Swap the stored thread when the target changes (e.g. a different document).
   useEffect(() => {
@@ -126,8 +146,20 @@ export default function FloatingAssistant({
     if (open) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages, open]);
 
-  async function send() {
-    const text = input.trim();
+  useEffect(() => {
+    voiceOnRef.current = voiceOn;
+  }, [voiceOn]);
+
+  useEffect(() => {
+    return () => {
+      stopSpeaking();
+      abortRef.current?.abort();
+      recorderRef.current?.cancel();
+    };
+  }, []);
+
+  async function sendText(raw: string) {
+    const text = raw.trim();
     if (!text || busy) return;
     setError(null);
     setInput("");
@@ -140,6 +172,7 @@ export default function FloatingAssistant({
     setMessages([...prior, { role: "user", content: text }, { role: "assistant", content: "" }]);
     setBusy(true);
 
+    const willSpeak = voiceChat && voiceOnRef.current;
     const ac = new AbortController();
     abortRef.current = ac;
     try {
@@ -160,8 +193,9 @@ export default function FloatingAssistant({
         });
         if (msg.tool_calls && msg.tool_calls.length) {
           for (const tc of msg.tool_calls) {
-            const raw = tc.function.arguments;
-            const parsed = typeof raw === "string" ? safeParse(raw) : (raw ?? {});
+            const rawArgs = tc.function.arguments;
+            const parsed =
+              typeof rawArgs === "string" ? safeParse(rawArgs) : (rawArgs ?? {});
             const result = await executeTool!(tc.function.name, parsed);
             if (result.summary) actions.push(result.summary);
             if (result.content) generated.push(result.content);
@@ -182,6 +216,7 @@ export default function FloatingAssistant({
           return copy;
         });
         if (actions.length) onAction?.();
+        if (willSpeak && finalContent) speak(finalContent);
       } else {
         let acc = "";
         await streamChat({
@@ -197,12 +232,14 @@ export default function FloatingAssistant({
             });
           },
         });
+        const finalContent = acc.trim();
         setMessages((m) => {
           const copy = m.slice();
-          copy[copy.length - 1] = { role: "assistant", content: acc.trim() };
+          copy[copy.length - 1] = { role: "assistant", content: finalContent };
           save(storageKey, copy);
           return copy;
         });
+        if (willSpeak && finalContent) speak(finalContent);
       }
     } catch (e) {
       if (ac.signal.aborted) {
@@ -219,6 +256,10 @@ export default function FloatingAssistant({
     }
   }
 
+  async function send() {
+    await sendText(input);
+  }
+
   function stop() {
     abortRef.current?.abort();
     setBusy(false);
@@ -226,9 +267,58 @@ export default function FloatingAssistant({
 
   function clear() {
     stop();
+    stopSpeaking();
     setMessages([]);
     setError(null);
     save(storageKey, []);
+  }
+
+  function close() {
+    stopSpeaking();
+    setOpen(false);
+  }
+
+  function toggleVoice() {
+    setVoiceOn((v) => {
+      if (v) stopSpeaking();
+      return !v;
+    });
+  }
+
+  async function startRecording() {
+    if (busy || transcribing) return;
+    setError(null);
+    const rec = new AudioRecorder();
+    try {
+      await rec.start();
+      recorderRef.current = rec;
+      setRecording(true);
+    } catch {
+      setError(
+        "Couldn't access the microphone. Check that recording is allowed.",
+      );
+    }
+  }
+
+  async function stopRecording() {
+    const rec = recorderRef.current;
+    if (!rec) return;
+    setRecording(false);
+    setTranscribing(true);
+    try {
+      const blob = await rec.stop();
+      const text = await transcribe(blob);
+      if (text) {
+        setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+      } else {
+        setError("Didn't catch any speech — try recording again.");
+      }
+    } catch (e) {
+      setError((e as Error).message || "Transcription failed.");
+    } finally {
+      recorderRef.current = null;
+      setTranscribing(false);
+    }
   }
 
   if (!open) {
@@ -254,6 +344,18 @@ export default function FloatingAssistant({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {voiceOut && (
+            <button
+              onClick={toggleVoice}
+              title={voiceOn ? "Voice replies on" : "Voice replies off"}
+              className={cn(
+                "rounded p-1 opacity-80 hover:bg-primary-foreground/15 hover:opacity-100",
+                voiceOn && "bg-primary-foreground/20 opacity-100",
+              )}
+            >
+              {voiceOn ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
+            </button>
+          )}
           {messages.length > 0 && (
             <button
               onClick={clear}
@@ -264,7 +366,7 @@ export default function FloatingAssistant({
             </button>
           )}
           <button
-            onClick={() => setOpen(false)}
+            onClick={close}
             title="Close"
             className="rounded p-1 opacity-80 hover:bg-primary-foreground/15 hover:opacity-100"
           >
@@ -343,6 +445,21 @@ export default function FloatingAssistant({
             Start Ollama and pull your model, then try again.
           </p>
         )}
+        {voiceInput && (recording || transcribing) && (
+          <p className="mb-1.5 flex items-center justify-center gap-1.5 text-center text-[11px] text-muted-foreground">
+            {recording ? (
+              <>
+                <span className="inline-block size-2 animate-pulse rounded-full bg-red-500" />
+                Recording… tap the mic to stop.
+              </>
+            ) : (
+              <>
+                <Loader2 className="size-3 animate-spin" />
+                Transcribing…
+              </>
+            )}
+          </p>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -363,6 +480,34 @@ export default function FloatingAssistant({
             placeholder={placeholder}
             className="max-h-28 min-h-[38px] flex-1 resize-none rounded-full border border-border bg-background px-4 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
+          {voiceInput && (
+            <Button
+              type="button"
+              size="icon"
+              variant={recording ? "default" : "outline"}
+              className={cn(
+                "size-9 shrink-0 rounded-full",
+                recording && "bg-red-500 text-white hover:bg-red-600",
+              )}
+              onClick={recording ? stopRecording : startRecording}
+              disabled={busy || transcribing}
+              title={
+                recording
+                  ? "Stop and transcribe"
+                  : transcribing
+                    ? "Transcribing…"
+                    : "Record a voice message"
+              }
+            >
+              {transcribing ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : recording ? (
+                <Square className="size-4" />
+              ) : (
+                <Mic className="size-4" />
+              )}
+            </Button>
+          )}
           {busy && !toolMode ? (
             <Button
               type="button"
