@@ -15,12 +15,12 @@ async function buildSystem(): Promise<string> {
   const memories = await listMemories();
 
   const roleLine = [
-    "You are his book editor for this manuscript — not a brainstorming buddy (that is the main Assistant tab).",
-    "He will dictate story, discuss structure, or ask you to fix the book. Your job is to turn that into a clean, publishable manuscript: clear Chapter/Part headings, sensible page breaks, and pages that fit the chosen print trim.",
-    "Workflow when he dictates or explains the story: (1) turn his words into chapters with replace_structure (each page/chapter starts with a heading like \"Chapter One\"), which runs an editorial pass by default; (2) if he names a size like 5x8, pass it as size or call editorial_pass / set_trim_size.",
-    "Workflow when he asks to fix an existing book: call editorial_pass (splits mixed chapters, paginates overflow to the next page, renumbers chapters). Use merge_pages / move_page / write_page / append_page for surgical edits.",
-    "If no book is open and he wants to start, call start_blank_book (or replace_structure, which can create one).",
-    "After acting, confirm briefly what you changed (page count, trim, chapters) and invite him to review. When he only asks a question, answer without tools.",
+    "You are his book editor and writing partner for this manuscript — not a brainstorming buddy (that is the main Assistant tab).",
+    "He will dictate story, discuss structure, or ask you to write and polish. Your job: clean chapters/pages, even print pagination for the trim, and the prose tools from writing (grammar, tighten, rephrase, continue, expand, tone, title).",
+    "CRITICAL page layout: never leave a nearly empty page followed by a packed page. After writing or restructuring, always run editorial_pass (or replace_structure with its default pass) so sentences fill each page to capacity. Do not invent sparse one-paragraph pages mid-chapter.",
+    "Writing help: edit_page (grammar|tighten|rephrase), continue_writing, expand_page, rewrite_tone, suggest_title — same capabilities the old Writing tab had, applied to book pages.",
+    "Workflow when he dictates: replace_structure into chapters, then editorial_pass / size if needed. When pages look uneven: editorial_pass.",
+    "If no book is open, start_blank_book or replace_structure. After acting, confirm briefly and invite review. Questions only → no tools.",
   ].join(" ");
 
   const sizesLine = `Available trim sizes: ${TRIM_SIZES.map((t) => t.id).join(", ")}.`;
@@ -39,7 +39,7 @@ async function buildSystem(): Promise<string> {
   const trim = getTrimById(m.trimId);
   const metrics = trimParagraphMetrics(trim);
   const words = m.pages.reduce((n, p) => n + countWords(p), 0);
-  const titleLine = `The open book is titled "${m.title || "Untitled"}" — ${m.pages.length} pages, ~${words} words. Page numbers in tools are 1-based. Each page should fit the current trim; overflow belongs on the next page.`;
+  const titleLine = `The open book is titled "${m.title || "Untitled"}" — ${m.pages.length} pages, ~${words} words. Page numbers in tools are 1-based. Fill pages in reading order to ~${metrics.wordsPerPage} words each; overflow goes to the next page — no sparse mid-chapter pages.`;
   const trimLine = `Current trim: ${trim.label} (id ${trim.id}). Capacity ~${metrics.wordsPerPage} words / ~${metrics.linesPerPage} lines per page; target ~${metrics.wordsPerParagraph} words per paragraph.`;
 
   return [
@@ -68,11 +68,11 @@ export default function BookAssistant({ onChanged }: BookAssistantProps) {
   return (
     <FloatingAssistant
       title="Book editor"
-      subtitle="Dictate, discuss, fix structure"
-      emptyHint='Dictate or describe your story — I’ll turn it into chapters and pages. Try “make this 5x8 and fix the book”, or “clean up the chapters”. Tap the mic to talk.'
+      subtitle="Write, structure & polish"
+      emptyHint='Dictate a chapter, ask to “fix grammar on page 2”, “continue writing”, “make this 5x8”, or “fix uneven pages”. Tap the mic to talk.'
       storageKey="book"
       buildSystem={buildSystem}
-      placeholder="Dictate or tell me how to edit the book…"
+      placeholder="Write, dictate, or tell me how to edit…"
       bubbleTitle="Book editor"
       tools={BOOK_TOOLS}
       executeTool={executeBookTool}

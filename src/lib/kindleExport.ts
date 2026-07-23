@@ -90,6 +90,10 @@ interface TextBlock {
   text: string;
 }
 
+type PageUnit =
+  | { kind: "heading"; text: string; words: number }
+  | { kind: "sentence"; text: string; words: number };
+
 /** Reflow walls of text into paragraph lengths suited to the trim. */
 export function formatPageForTrim(text: string, trim: TrimSize): string {
   const { wordsPerParagraph } = trimParagraphMetrics(trim);
@@ -156,132 +160,162 @@ function textToBlocks(text: string): TextBlock[] {
     .filter((b) => b.text);
 }
 
-function estimateLines(block: TextBlock, charsPerLine: number): number {
-  if (block.heading) return 3; // heading + spacing
-  const chars = Math.max(block.text.length, countWordsLocal(block.text) * 5);
-  return Math.max(1, Math.ceil(chars / charsPerLine)) + 1; // +1 paragraph gap
+function splitSentences(text: string): string[] {
+  return (text.match(/[^.!?…]+(?:[.!?…]+["”']?|$)/g) ?? [text])
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
-/** Split a long body paragraph across page-sized chunks at sentence ends. */
-function splitBodyAcrossPages(
-  text: string,
-  trim: TrimSize,
-  firstPageWords?: number,
-  firstPageLines?: number,
-): string[] {
-  const { wordsPerPage, charsPerLine, linesPerPage } = trimParagraphMetrics(trim);
-  const sentences = text.match(/[^.!?…]+(?:[.!?…]+["”']?|$)/g) ?? [text];
-  const pages: string[] = [];
-  let buf: string[] = [];
-  let words = 0;
-  let lines = 0;
-  let limitWords = firstPageWords ?? wordsPerPage;
-  let limitLines = firstPageLines ?? linesPerPage;
-
-  const flush = () => {
-    if (!buf.length) return;
-    pages.push(buf.join(" ").replace(/\s+/g, " ").trim());
-    buf = [];
-    words = 0;
-    lines = 0;
-    limitWords = wordsPerPage;
-    limitLines = linesPerPage;
-  };
-
-  for (const raw of sentences) {
-    const s = raw.trim();
-    if (!s) continue;
-    const w = countWordsLocal(s);
-    const l = Math.max(1, Math.ceil(s.length / charsPerLine));
-    if (buf.length && (words + w > limitWords || lines + l > limitLines)) {
-      flush();
-    }
-    // Extremely long sentence: hard-split by words so a page never overflows.
-    if (w > limitWords) {
-      flush();
-      const parts = s.split(/\s+/).filter(Boolean);
-      let i = 0;
-      let cap = limitWords;
-      while (i < parts.length) {
-        pages.push(parts.slice(i, i + cap).join(" "));
-        i += cap;
-        cap = wordsPerPage;
-        limitWords = wordsPerPage;
-        limitLines = linesPerPage;
-      }
+/** Flatten blocks into a heading/sentence stream for even page packing. */
+function blocksToUnits(blocks: TextBlock[]): PageUnit[] {
+  const units: PageUnit[] = [];
+  for (const b of blocks) {
+    if (b.heading) {
+      units.push({
+        kind: "heading",
+        text: b.text,
+        words: countWordsLocal(b.text),
+      });
       continue;
     }
-    buf.push(s);
-    words += w;
-    lines += l;
+    for (const s of splitSentences(b.text)) {
+      units.push({ kind: "sentence", text: s, words: countWordsLocal(s) });
+    }
   }
-  flush();
-  return pages.length ? pages : [text];
+  return units;
+}
+
+function unitsWordCount(units: PageUnit[]): number {
+  return units.reduce((n, u) => n + u.words, 0);
+}
+
+/** Render a packed page: heading first, then body paragraphs of target length. */
+function renderPackedPage(
+  units: PageUnit[],
+  wordsPerParagraph: number,
+): string {
+  const parts: string[] = [];
+  let para: string[] = [];
+  let paraWords = 0;
+  const softPara = Math.round(wordsPerParagraph * 1.35);
+
+  const flushPara = () => {
+    if (!para.length) return;
+    parts.push(para.join(" ").replace(/\s+/g, " ").trim());
+    para = [];
+    paraWords = 0;
+  };
+
+  for (const u of units) {
+    if (u.kind === "heading") {
+      flushPara();
+      parts.push(u.text);
+      continue;
+    }
+    if (paraWords > 0 && paraWords + u.words > softPara) flushPara();
+    para.push(u.text);
+    paraWords += u.words;
+    if (paraWords >= wordsPerParagraph) flushPara();
+  }
+  flushPara();
+  return parts.join("\n\n");
+}
+
+/** Hard-split an oversized sentence into word chunks that fit a page. */
+function chunkWords(text: string, maxWords: number): PageUnit[] {
+  const parts = text.split(/\s+/).filter(Boolean);
+  const out: PageUnit[] = [];
+  for (let i = 0; i < parts.length; i += maxWords) {
+    const slice = parts.slice(i, i + maxWords).join(" ");
+    out.push({ kind: "sentence", text: slice, words: countWordsLocal(slice) });
+  }
+  return out.length ? out : [{ kind: "sentence", text, words: countWordsLocal(text) }];
 }
 
 /**
- * Pack reflowed blocks into print pages that fit the trim. Chapter/part
- * headings start a new page; overflow continues on the next page (with the
- * heading kept on the first page of its chapter, not alone).
+ * Pack content into print pages that fill in order for the trim.
+ * Chapter/part headings start a new page; body sentences fill each page near
+ * capacity so we don't leave a sparse page before a full one.
  */
 export function paginateBlocksForTrim(
   blocks: TextBlock[],
   trim: TrimSize,
 ): string[] {
-  const { wordsPerPage, charsPerLine, linesPerPage } = trimParagraphMetrics(trim);
-  const pages: string[] = [];
-  let current: TextBlock[] = [];
+  const { wordsPerPage, wordsPerParagraph } = trimParagraphMetrics(trim);
+  // Prefer a slightly full page over a nearly empty one.
+  const softMax = Math.max(wordsPerPage, Math.round(wordsPerPage * 1.08));
+  const minFill = Math.round(wordsPerPage * 0.62);
+
+  const rawUnits = blocksToUnits(blocks);
+  // Expand monster sentences so packing stays predictable.
+  const units: PageUnit[] = [];
+  for (const u of rawUnits) {
+    if (u.kind === "sentence" && u.words > softMax) {
+      units.push(...chunkWords(u.text, wordsPerPage));
+    } else {
+      units.push(u);
+    }
+  }
+
+  const packed: PageUnit[][] = [];
+  let current: PageUnit[] = [];
   let words = 0;
-  let lines = 0;
 
   const flush = () => {
     if (!current.length) return;
-    pages.push(current.map((b) => b.text).join("\n\n"));
+    packed.push(current);
     current = [];
     words = 0;
-    lines = 0;
   };
 
-  for (const block of blocks) {
-    // New chapter/part starts on a fresh page.
-    if (block.heading && current.length) flush();
-
-    const w = countWordsLocal(block.text);
-    const l = estimateLines(block, charsPerLine);
-
-    // Body longer than remaining room (or a full page): fill this page, then
-    // continue overflow on following pages.
-    if (!block.heading && (words + w > wordsPerPage || lines + l > linesPerPage)) {
-      const roomW = Math.max(0, wordsPerPage - words);
-      const roomL = Math.max(0, linesPerPage - lines);
-      // Keep a heading with the start of its body when there's useful room.
-      const minFill = current.some((b) => b.heading) ? 8 : 15;
-      if (current.length && roomW >= minFill && roomL >= 1) {
-        const chunks = splitBodyAcrossPages(block.text, trim, roomW, roomL);
-        const [first, ...rest] = chunks;
-        if (first) current.push({ heading: false, text: first });
-        flush();
-        for (const chunk of rest) pages.push(chunk);
-        continue;
-      }
-      flush();
-      for (const chunk of splitBodyAcrossPages(block.text, trim)) {
-        pages.push(chunk);
-      }
+  for (const u of units) {
+    if (u.kind === "heading") {
+      if (current.length) flush();
+      current.push(u);
+      words += u.words;
       continue;
     }
 
-    current.push(block);
-    words += w;
-    lines += l;
+    if (current.length && words + u.words > softMax) {
+      flush();
+    }
+    current.push(u);
+    words += u.words;
   }
   flush();
-  return pages.length ? pages : [""];
+
+  // Pull sentences forward onto under-filled pages (stop at chapter headings).
+  for (let p = 0; p < packed.length - 1; ) {
+    let w = unitsWordCount(packed[p]);
+    if (w >= minFill) {
+      p += 1;
+      continue;
+    }
+    const next = packed[p + 1];
+    if (!next.length || next[0]?.kind === "heading") {
+      p += 1;
+      continue;
+    }
+    const take = next.shift()!;
+    if (w + take.words > softMax && w >= Math.round(minFill * 0.75)) {
+      next.unshift(take);
+      p += 1;
+      continue;
+    }
+    packed[p].push(take);
+    if (!next.length) packed.splice(p + 1, 1);
+    // stay on p to keep filling
+  }
+
+  // Drop empties; render paragraphs for the trim.
+  return packed
+    .filter((page) => page.length > 0)
+    .map((page) => renderPackedPage(page, wordsPerParagraph));
 }
 
 /**
- * Reflow paragraphs for the trim, then split into print pages so no page is
- * longer than the trim allows — overflow moves to the next page.
+ * Reflow paragraphs for the trim, then split into print pages so each page
+ * fills in order — overflow continues on the next page, no sparse gaps.
  * If pageIndex is set, only that page is split (inserted in place).
  */
 export function formatPagesForTrim(
@@ -300,8 +334,8 @@ export function formatPagesForTrim(
     ];
   }
 
-  // Whole book: reflow each existing page, then pack into trim-sized pages
-  // (chapter headings still force a page break).
+  // Whole book: reflow, then pack as one continuous manuscript (chapter
+  // headings still force a page break).
   const blocks: TextBlock[] = [];
   for (const page of pages) {
     const formatted = formatPageForTrim(page, trim);

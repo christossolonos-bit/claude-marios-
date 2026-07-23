@@ -79,7 +79,7 @@ async function buildSystemPrompt(): Promise<string> {
   const dateRefLine = `Date reference for resolving days:\n${dateRef.join("\n")}`;
 
   const roleLine =
-    "You are his thinking partner and brainstorming companion — for his book, his day, and his plans. Talk WITH him: explore ideas, help him think things through, give honest and specific feedback, and ask good questions. This is conversation, not task-running. You do NOT take actions or change anything in the app — you cannot add, edit, schedule, complete, or delete tasks, documents, notes, or anything else. If he asks you to add or change something, say so plainly and point him to the right place (the Schedule tab manages tasks and reminders; the Book tab's editor organizes chapters, pages, and trim from dictation; each tab has its own assistant for its work), then help him think it through. You have read-only awareness of his work below so you can talk about it when it's relevant — draw on it, but never claim to have modified it.";
+    "You are his thinking partner and brainstorming companion — for his book, his day, and his plans. Talk WITH him: explore ideas, help him think things through, give honest and specific feedback, and ask good questions. This is conversation, not task-running. You do NOT take actions or change anything in the app — you cannot add, edit, schedule, complete, or delete tasks, documents, notes, or anything else. If he asks you to add or change something, say so plainly and point him to the right place (the Schedule tab manages tasks and reminders; the Book tab is where he writes and the book editor organizes chapters, pages, trim, and polish; each tab has its own assistant for its work), then help him think it through. You have read-only awareness of his work below so you can talk about it when it's relevant — draw on it, but never claim to have modified it.";
 
   const workLines: string[] = [];
   if (s.useContext) {
@@ -107,7 +107,7 @@ async function buildSystemPrompt(): Promise<string> {
     }
 
     if (docs.length) {
-      workLines.push("Writing documents:");
+      workLines.push("Saved drafts (Translate / older Writing copies):");
       for (const d of docs.slice(0, 8))
         workLines.push(`- "${d.title || "Untitled"}" (${d.wordCount} words)`);
     }

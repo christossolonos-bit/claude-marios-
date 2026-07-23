@@ -1,8 +1,7 @@
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import Layout from "@/components/Layout";
 import Dashboard from "@/pages/Dashboard";
 import Schedule from "@/pages/Schedule";
-import Writing from "@/pages/Writing";
 import Translate from "@/pages/Translate";
 import Book from "@/pages/Book";
 import Presentations from "@/pages/Presentations";
@@ -16,7 +15,7 @@ export default function App() {
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
         <Route path="schedule" element={<Schedule />} />
-        <Route path="writing" element={<Writing />} />
+        <Route path="writing" element={<Navigate to="/book" replace />} />
         <Route path="translate" element={<Translate />} />
         <Route path="book" element={<Book />} />
         <Route path="presentations" element={<Presentations />} />

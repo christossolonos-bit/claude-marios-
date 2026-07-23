@@ -390,9 +390,9 @@ export default function Book() {
         <h1 className="text-2xl font-semibold tracking-tight">Book</h1>
       </div>
       <p className="mb-6 text-muted-foreground">
-        Your book editor. Dictate or talk with the assistant to shape chapters,
-        pages, and trim size — then tweak or proofread anything by hand.
-        Everything stays on this machine.
+        Your book editor — write, dictate, and polish here. The assistant can
+        structure chapters, fit trim sizes, continue or expand prose, and fix
+        grammar. Everything stays on this machine.
       </p>
 
       {error && (

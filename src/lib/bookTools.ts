@@ -22,6 +22,26 @@ import {
   runEditorialPass,
   splitAtHeadings,
 } from "@/lib/bookEditor";
+import {
+  suggestEdit,
+  suggestContinue,
+  suggestExpand,
+  suggestTone,
+  suggestTitle,
+  type EditAction,
+  type Tone,
+  TONES,
+} from "@/lib/writingAssist";
+
+async function collectStream(
+  run: (onToken: (t: string) => void) => Promise<void>,
+): Promise<string> {
+  let acc = "";
+  await run((t) => {
+    acc += t;
+  });
+  return acc.trim();
+}
 
 export const BOOK_TOOLS = [
   {
@@ -59,9 +79,92 @@ export const BOOK_TOOLS = [
   {
     type: "function",
     function: {
+      name: "suggest_title",
+      description:
+        "Invent a title from the manuscript and set it on the book (same idea as the old Writing tab title tool).",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit_page",
+      description:
+        "Copy-edit one page in place: fix grammar, tighten prose, or rephrase. Use when he asks to polish, fix grammar, or rewrite a page more smoothly.",
+      parameters: {
+        type: "object",
+        properties: {
+          page: { type: "integer", description: "Page number, starting at 1" },
+          action: {
+            type: "string",
+            enum: ["grammar", "tighten", "rephrase"],
+            description: "grammar = fix spelling/grammar; tighten = shorter; rephrase = smoother",
+          },
+        },
+        required: ["page", "action"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "continue_writing",
+      description:
+        "Continue writing naturally from the end of a page (2–4 sentences appended). Use when he asks to keep going or write the next bit.",
+      parameters: {
+        type: "object",
+        properties: {
+          page: {
+            type: "integer",
+            description: "Page to continue (1-based). Defaults to the last page.",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "expand_page",
+      description:
+        "Expand a page with more detail, texture, or example while keeping voice. Replaces the page text with the expanded version.",
+      parameters: {
+        type: "object",
+        properties: {
+          page: { type: "integer", description: "Page number, starting at 1" },
+        },
+        required: ["page"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "rewrite_tone",
+      description:
+        "Rewrite a page in a different tone while preserving meaning.",
+      parameters: {
+        type: "object",
+        properties: {
+          page: { type: "integer", description: "Page number, starting at 1" },
+          tone: {
+            type: "string",
+            enum: ["Warmer", "More formal", "Simpler", "More vivid"],
+          },
+        },
+        required: ["page", "tone"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "editorial_pass",
       description:
-        "Full book-editor pass: split mixed chapters apart, reflow paragraphs, paginate so each page fits the trim (overflow → next page), and renumber Chapter headings. Use when he asks to fix, clean up, or properly format the book after dictating or discussing — or when he names a trim size and wants the manuscript fixed for it.",
+        "Full book-editor pass: split mixed chapters, reflow paragraphs, and paginate so each page fills in order for the trim (no sparse page before a full one — overflow continues on the next page), then renumber Chapter headings. Use whenever pages look uneven, after dictation, or when he asks to fix the book.",
       parameters: {
         type: "object",
         properties: {
@@ -408,6 +511,119 @@ export async function executeBookTool(
       const title = str(args.title).trim() || "Untitled";
       persist({ ...m, title });
       return { summary: `Book title set to "${title}"` };
+    }
+
+    case "suggest_title": {
+      const m = requireManuscript();
+      if (!m) return { summary: "No book open yet." };
+      const body = m.pages.join("\n\n").trim();
+      if (!body) return { summary: "Nothing to title yet — write some pages first." };
+      const title = await collectStream((onToken) =>
+        suggestTitle({ body: body.slice(0, 8000), onToken }),
+      );
+      if (!title) return { summary: "Couldn't suggest a title." };
+      persist({ ...m, title: title.replace(/^["']|["']$/g, "").trim() });
+      return { summary: `Suggested title: "${title}"` };
+    }
+
+    case "edit_page": {
+      const m = requireManuscript();
+      if (!m) return { summary: "No book open yet." };
+      const page = int(args.page);
+      if (page == null) return { summary: "Need a page number (starting at 1)." };
+      const i = pageIndex(page, m.pages.length);
+      if (i == null)
+        return {
+          summary: `Page ${page} doesn't exist (book has ${m.pages.length} pages).`,
+        };
+      const action = str(args.action) as EditAction;
+      if (action !== "grammar" && action !== "tighten" && action !== "rephrase")
+        return { summary: 'action must be "grammar", "tighten", or "rephrase".' };
+      const text = m.pages[i];
+      if (!text.trim()) return { summary: `Page ${page} is empty.` };
+      const revised = await collectStream((onToken) =>
+        suggestEdit({ action, text, onToken }),
+      );
+      if (!revised) return { summary: `Couldn't ${action} page ${page}.` };
+      const pages = m.pages.slice();
+      pages[i] = revised;
+      persist({ ...m, pages });
+      return { summary: `${action} applied to page ${page}` };
+    }
+
+    case "continue_writing": {
+      const m = requireManuscript();
+      if (!m) return { summary: "No book open yet." };
+      let page = int(args.page);
+      if (page == null) page = m.pages.length;
+      const i = pageIndex(page, m.pages.length);
+      if (i == null)
+        return {
+          summary: `Page ${page} doesn't exist (book has ${m.pages.length} pages).`,
+        };
+      const body = m.pages[i];
+      const addition = await collectStream((onToken) =>
+        suggestContinue({ body, onToken }),
+      );
+      if (!addition) return { summary: "Couldn't continue writing." };
+      const pages = m.pages.slice();
+      const cur = pages[i] ?? "";
+      const sep = !cur ? "" : /\n\s*$/.test(cur) ? "\n" : "\n\n";
+      pages[i] = cur + sep + addition;
+      persist({ ...m, pages });
+      return {
+        summary: `Continued writing on page ${page}`,
+        content: addition,
+      };
+    }
+
+    case "expand_page": {
+      const m = requireManuscript();
+      if (!m) return { summary: "No book open yet." };
+      const page = int(args.page);
+      if (page == null) return { summary: "Need a page number (starting at 1)." };
+      const i = pageIndex(page, m.pages.length);
+      if (i == null)
+        return {
+          summary: `Page ${page} doesn't exist (book has ${m.pages.length} pages).`,
+        };
+      const text = m.pages[i];
+      if (!text.trim()) return { summary: `Page ${page} is empty.` };
+      const expanded = await collectStream((onToken) =>
+        suggestExpand({ text, onToken }),
+      );
+      if (!expanded) return { summary: `Couldn't expand page ${page}.` };
+      const pages = m.pages.slice();
+      pages[i] = expanded;
+      persist({ ...m, pages });
+      return { summary: `Expanded page ${page}` };
+    }
+
+    case "rewrite_tone": {
+      const m = requireManuscript();
+      if (!m) return { summary: "No book open yet." };
+      const page = int(args.page);
+      if (page == null) return { summary: "Need a page number (starting at 1)." };
+      const i = pageIndex(page, m.pages.length);
+      if (i == null)
+        return {
+          summary: `Page ${page} doesn't exist (book has ${m.pages.length} pages).`,
+        };
+      const tone = str(args.tone) as Tone;
+      if (!(TONES as readonly string[]).includes(tone))
+        return {
+          summary: `tone must be one of: ${TONES.join(", ")}.`,
+        };
+      const text = m.pages[i];
+      if (!text.trim()) return { summary: `Page ${page} is empty.` };
+      const revised = await collectStream((onToken) =>
+        suggestTone({ text, tone, onToken }),
+      );
+      if (!revised) return { summary: `Couldn't rewrite page ${page}.` };
+      const pages = m.pages.slice();
+      pages[i] = revised;
+      persist({ ...m, pages });
+      return { summary: `Rewrote page ${page} (${tone.toLowerCase()})` };
     }
 
     case "editorial_pass": {

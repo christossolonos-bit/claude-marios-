@@ -3,7 +3,6 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   CalendarDays,
-  PenLine,
   Languages,
   BookText,
   Presentation,
@@ -21,9 +20,8 @@ const LAST_ROUTE = "authorhub.lastroute";
 const nav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/schedule", label: "Schedule", icon: CalendarDays },
-  { to: "/writing", label: "Writing", icon: PenLine },
-  { to: "/translate", label: "Translate", icon: Languages },
   { to: "/book", label: "Book", icon: BookText },
+  { to: "/translate", label: "Translate", icon: Languages },
   { to: "/presentations", label: "Presentations", icon: Presentation },
   { to: "/assistant", label: "Assistant", icon: Bot },
   { to: "/setup", label: "Setup", icon: Rocket },
@@ -48,8 +46,9 @@ export default function Layout() {
     if (restored.current) return;
     restored.current = true;
     const last = localStorage.getItem(LAST_ROUTE);
-    if (last && last !== location.pathname) {
-      navigate(last, { replace: true });
+    const target = last === "/writing" ? "/book" : last;
+    if (target && target !== location.pathname) {
+      navigate(target, { replace: true });
     }
   }, [location.pathname, navigate]);
 
