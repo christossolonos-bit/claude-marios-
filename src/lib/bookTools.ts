@@ -298,7 +298,7 @@ export const BOOK_TOOLS = [
     function: {
       name: "write_page",
       description:
-        "Replace the full text of one page (1-based). Prefer this when rewriting a single chapter or page.",
+        "Replace one page with book prose. Use when he wants a specific page/chapter rewritten from what he just said.",
       parameters: {
         type: "object",
         properties: {
@@ -318,12 +318,12 @@ export const BOOK_TOOLS = [
     function: {
       name: "append_page",
       description:
-        "Append text to the end of an existing page (1-based). Good for adding dictated prose onto a chapter before an editorial_pass.",
+        "REQUIRED when he continues dictating more of the same chapter. Append shaped book prose to that page — do not only chat back what he said.",
       parameters: {
         type: "object",
         properties: {
           page: { type: "integer", description: "Page number, starting at 1" },
-          content: { type: "string", description: "Text to append" },
+          content: { type: "string", description: "Prose to append" },
         },
         required: ["page", "content"],
       },
@@ -334,7 +334,7 @@ export const BOOK_TOOLS = [
     function: {
       name: "add_page",
       description:
-        "Add a new page at the end of the book. Use for a new chapter or continued text.",
+        "Add a new page/chapter at the end from what he dictated. Start with a heading when it is a new chapter.",
       parameters: {
         type: "object",
         properties: {
@@ -402,7 +402,7 @@ export const BOOK_TOOLS = [
     function: {
       name: "replace_structure",
       description:
-        "Replace the entire book with a new ordered list of pages/chapters. Primary tool after he dictates or explains the story: turn his words into proper Chapter/Part pages (each item starts with a heading), then usually follow with editorial_pass so pages fit the trim.",
+        "REQUIRED when he dictates or explains story content. Replace the manuscript with ordered pages from Prologue through chapters. Turn his intent into real book prose — each item starts with a heading like \"Prologue\" or \"Chapter One\", then paragraphs. Do not leave his words only in chat.",
       parameters: {
         type: "object",
         properties: {
@@ -410,7 +410,7 @@ export const BOOK_TOOLS = [
             type: "array",
             items: { type: "string" },
             description:
-              'Ordered pages. Example: ["Chapter One\\n\\n…", "Chapter Two\\n\\n…"]',
+              'Ordered book sections. Example: ["Prologue\\n\\n…", "Chapter One\\n\\n…", "Chapter Two\\n\\n…"]',
           },
           title: {
             type: "string",

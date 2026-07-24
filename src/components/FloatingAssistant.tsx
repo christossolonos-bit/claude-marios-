@@ -94,6 +94,13 @@ export interface FloatingAssistantProps {
    * replies (same TTS pipeline as the main Assistant).
    */
   voiceChat?: boolean;
+  /**
+   * Tool mode only: if the model replies without calling tools and this
+   * returns true for the user message, retry once with a nudge to act.
+   */
+  nudgeIfNoTools?: (userMessage: string) => boolean;
+  /** Message used on the nudge retry (tool mode). */
+  toolNudge?: string;
 }
 
 /**
@@ -113,6 +120,8 @@ export default function FloatingAssistant({
   executeTool,
   onAction,
   voiceChat = false,
+  nudgeIfNoTools,
+  toolNudge = "You replied without using tools. Call the appropriate tools now to update the app based on what he said. Only skip tools if he asked a pure question that needs no change.",
 }: FloatingAssistantProps) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Msg[]>(() => load(storageKey));
@@ -186,12 +195,9 @@ export default function FloatingAssistant({
       if (toolMode) {
         const actions: string[] = [];
         const generated: string[] = [];
-        const msg: AssistantMessage = await chat({
-          model: getSettings().model,
-          messages: convo,
-          tools,
-        });
-        if (msg.tool_calls && msg.tool_calls.length) {
+
+        async function runTools(msg: AssistantMessage) {
+          if (!msg.tool_calls?.length) return;
           for (const tc of msg.tool_calls) {
             const rawArgs = tc.function.arguments;
             const parsed =
@@ -201,6 +207,36 @@ export default function FloatingAssistant({
             if (result.content) generated.push(result.content);
           }
         }
+
+        let msg: AssistantMessage = await chat({
+          model: getSettings().model,
+          messages: convo,
+          tools,
+        });
+        await runTools(msg);
+
+        // If he clearly wanted an action and the model only chatted, nudge once.
+        if (
+          !actions.length &&
+          nudgeIfNoTools?.(text) &&
+          !ac.signal.aborted
+        ) {
+          const retryConvo: ChatMessage[] = [
+            ...convo,
+            {
+              role: "assistant",
+              content: msg.content?.trim() || "(no tools used)",
+            },
+            { role: "user", content: toolNudge },
+          ];
+          msg = await chat({
+            model: getSettings().model,
+            messages: retryConvo,
+            tools,
+          });
+          await runTools(msg);
+        }
+
         let finalContent = msg.content ?? "";
         if (generated.length)
           finalContent = [finalContent, ...generated].filter(Boolean).join("\n\n");
